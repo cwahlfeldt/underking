@@ -1,15 +1,17 @@
 mod components;
+mod consts;
 mod enemy;
 mod hex;
 mod player;
 mod tile;
+mod util;
 
 use crate::hex::Hex;
 use bevy::prelude::*;
 
 #[derive(Resource)]
 pub struct GameSettings {
-    selected_hex: Hex,
+    pub selected_hex: Hex,
 }
 
 fn main() {

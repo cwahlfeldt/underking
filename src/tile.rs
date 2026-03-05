@@ -1,8 +1,11 @@
 use bevy::prelude::*;
 
-use crate::hex::{Hex, HexGrid};
+use crate::{
+    GameSettings,
+    consts::HEX_SIZE,
+    hex::{Hex, HexGrid},
+};
 
-const HEX_SIZE: f32 = 40.0;
 const GAP: f32 = 1.5;
 const TILE_COLOR: Color = Color::srgb(0.2, 0.2, 0.2);
 const HIGHLIGHT_COLOR: Color = Color::srgb(0.6, 0.4, 0.15);
@@ -44,7 +47,15 @@ fn spawn_tiles(
                 Pickable::default(),
             ))
             .observe(update_material_on::<Pointer<Over>>(hover_matl.clone()))
-            .observe(update_material_on::<Pointer<Out>>(tile_matl.clone()));
+            .observe(update_material_on::<Pointer<Out>>(tile_matl.clone()))
+            .observe(on_tile_click);
+    }
+}
+
+fn on_tile_click(ev: On<Pointer<Click>>, query: Query<&Tile>, mut settings: ResMut<GameSettings>) {
+    if let Ok(tile) = query.get(ev.event_target()) {
+        info!("Clicked hex: {:?}", tile.hex);
+        settings.selected_hex = tile.hex;
     }
 }
 
