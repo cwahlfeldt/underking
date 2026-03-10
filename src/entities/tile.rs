@@ -1,10 +1,6 @@
 use bevy::prelude::*;
 
-use crate::{
-    GameSettings,
-    consts::HEX_SIZE,
-    hex::{Hex, HexGrid},
-};
+use crate::{GameSettings, components::HexPosition, hex::{HexGrid, HEX_SIZE, TileData}};
 
 const GAP: f32 = 1.5;
 const TILE_COLOR: Color = Color::srgb(0.2, 0.2, 0.2);
@@ -14,35 +10,45 @@ pub struct TilePlugin;
 
 impl Plugin for TilePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_tiles);
+        app.add_systems(Startup, spawn_tiles)
+            .add_systems(Update, render_tiles);
     }
 }
 
 #[derive(Component)]
-pub struct Tile {
-    pub hex: Hex,
+pub struct Tile;
+
+pub fn spawn_tiles(mut commands: Commands) {
+    let mut grid: HexGrid<TileData> = HexGrid::new(4);
+
+    for pos in grid.positions() {
+        let entity = commands.spawn((Tile, HexPosition(pos))).id();
+        grid.insert(pos, TileData {
+            tile_entity: Some(entity),
+            ..default()
+        });
+    }
+
+    commands.insert_resource(grid);
 }
 
-fn spawn_tiles(
+fn render_tiles(
     mut commands: Commands,
+    query: Query<Entity, Added<Tile>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let grid: HexGrid<Entity> = HexGrid::new(4);
-
     let hex_mesh = meshes.add(RegularPolygon::new(HEX_SIZE - GAP, 6));
     let tile_matl = materials.add(ColorMaterial::from_color(TILE_COLOR));
     let hover_matl = materials.add(ColorMaterial::from_color(HIGHLIGHT_COLOR));
 
-    for pos in grid.positions() {
-        let (x, y) = pos.to_pixel(HEX_SIZE);
-
+    for entity in &query {
         commands
-            .spawn((
-                Tile { hex: pos },
+            .entity(entity)
+            .insert((
                 Mesh2d(hex_mesh.clone()),
                 MeshMaterial2d(tile_matl.clone()),
-                Transform::from_xyz(x, y, 0.0)
+                Transform::default()
                     .with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_6)),
                 Pickable::default(),
             ))
@@ -52,10 +58,14 @@ fn spawn_tiles(
     }
 }
 
-fn on_tile_click(ev: On<Pointer<Click>>, query: Query<&Tile>, mut settings: ResMut<GameSettings>) {
-    if let Ok(tile) = query.get(ev.event_target()) {
-        info!("Clicked hex: {:?}", tile.hex);
-        settings.selected_hex = tile.hex;
+fn on_tile_click(
+    ev: On<Pointer<Click>>,
+    query: Query<&HexPosition>,
+    mut settings: ResMut<GameSettings>,
+) {
+    if let Ok(pos) = query.get(ev.event_target()) {
+        info!("Clicked hex: {:?}", pos.0);
+        settings.selected_hex = pos.0;
     }
 }
 

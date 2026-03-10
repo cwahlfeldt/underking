@@ -1,10 +1,7 @@
 mod components;
-mod consts;
-mod enemy;
+mod entities;
 mod hex;
-mod player;
-mod tile;
-mod util;
+mod render;
 
 use crate::hex::Hex;
 use bevy::prelude::*;
@@ -20,9 +17,10 @@ fn main() {
             selected_hex: Hex::ORIGIN,
         })
         .add_plugins((DefaultPlugins, MeshPickingPlugin))
-        .add_plugins(tile::TilePlugin)
-        .add_plugins(player::PlayerPlugin)
-        .add_plugins(enemy::EnemyPlugin)
+        .add_plugins(render::RenderPlugin)
+        .add_plugins(entities::tile::TilePlugin)
+        .add_plugins(entities::player::PlayerPlugin)
+        .add_plugins(entities::enemy::EnemyPlugin)
         .add_systems(Startup, setup)
         .run();
 }

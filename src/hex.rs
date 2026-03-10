@@ -1,5 +1,17 @@
-use std::collections::HashMap;
+use bevy::prelude::{Entity, Resource};
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 use std::ops::{Add, Neg, Sub};
+
+pub const HEX_SIZE: f32 = 40.0;
+
+#[derive(Debug, Clone, Default)]
+pub struct TileData {
+    pub tile_entity: Option<Entity>,
+    pub occupant: Option<Entity>,
+    pub attack_ranges: Vec<Entity>,
+    pub move_ranges: Vec<Entity>,
+}
 
 /// Cube coordinate on a hex grid.
 ///
@@ -217,7 +229,7 @@ const DIRECTIONS: [Hex; 6] = [
 /// A radius-0 grid is a single hex; radius-1 has 7 hexes, etc.
 ///
 /// Each cell can hold an optional value of type `T`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Resource)]
 pub struct HexGrid<T> {
     pub radius: i32,
     cells: HashMap<Hex, T>,
@@ -287,6 +299,90 @@ impl<T> HexGrid<T> {
             .into_iter()
             .filter(|&n| self.contains(n))
             .collect()
+    }
+
+    /// A* pathfinding from `start` to `goal`.
+    ///
+    /// `passable` returns true if a hex can be traversed. Both `start` and
+    /// `goal` are assumed passable regardless.
+    ///
+    /// Returns the path as a vec of hexes from `start` to `goal` (inclusive),
+    /// or `None` if no path exists.
+    pub fn astar(&self, start: Hex, goal: Hex, passable: impl Fn(Hex) -> bool) -> Option<Vec<Hex>> {
+        if !self.contains(start) || !self.contains(goal) {
+            return None;
+        }
+        if start == goal {
+            return Some(vec![start]);
+        }
+
+        let mut open = BinaryHeap::new();
+        let mut came_from: HashMap<Hex, Hex> = HashMap::new();
+        let mut g_score: HashMap<Hex, i32> = HashMap::new();
+
+        g_score.insert(start, 0);
+        open.push(AstarNode {
+            hex: start,
+            f: start.distance(goal),
+        });
+
+        while let Some(current) = open.pop() {
+            if current.hex == goal {
+                let mut path = vec![goal];
+                let mut node = goal;
+                while let Some(&prev) = came_from.get(&node) {
+                    path.push(prev);
+                    node = prev;
+                }
+                path.reverse();
+                return Some(path);
+            }
+
+            let current_g = g_score[&current.hex];
+
+            for neighbor in self.neighbors(current.hex) {
+                if neighbor != goal && !passable(neighbor) {
+                    continue;
+                }
+
+                let tentative_g = current_g + 1;
+                if tentative_g < *g_score.get(&neighbor).unwrap_or(&i32::MAX) {
+                    came_from.insert(neighbor, current.hex);
+                    g_score.insert(neighbor, tentative_g);
+                    open.push(AstarNode {
+                        hex: neighbor,
+                        f: tentative_g + neighbor.distance(goal),
+                    });
+                }
+            }
+        }
+
+        None
+    }
+}
+
+struct AstarNode {
+    hex: Hex,
+    f: i32,
+}
+
+impl Eq for AstarNode {}
+
+impl PartialEq for AstarNode {
+    fn eq(&self, other: &Self) -> bool {
+        self.f == other.f
+    }
+}
+
+impl Ord for AstarNode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other.f.cmp(&self.f) // reversed for min-heap
+    }
+}
+
+impl PartialOrd for AstarNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -400,5 +496,52 @@ mod tests {
         assert_eq!(Direction::E.opposite(), Direction::W);
         assert_eq!(Direction::NE.opposite(), Direction::SW);
         assert_eq!(Direction::NW.opposite(), Direction::SE);
+    }
+
+    #[test]
+    fn astar_straight_path() {
+        let grid: HexGrid<()> = HexGrid::new(3);
+        let start = Hex::axial(-2, 0);
+        let goal = Hex::axial(2, 0);
+        let path = grid.astar(start, goal, |_| true).unwrap();
+        assert_eq!(path.first(), Some(&start));
+        assert_eq!(path.last(), Some(&goal));
+        assert_eq!(path.len(), 5); // distance is 4, path has 5 nodes
+    }
+
+    #[test]
+    fn astar_same_start_and_goal() {
+        let grid: HexGrid<()> = HexGrid::new(2);
+        let path = grid.astar(Hex::ORIGIN, Hex::ORIGIN, |_| true).unwrap();
+        assert_eq!(path, vec![Hex::ORIGIN]);
+    }
+
+    #[test]
+    fn astar_blocked() {
+        let grid: HexGrid<()> = HexGrid::new(2);
+        let start = Hex::axial(-2, 0);
+        let goal = Hex::axial(2, 0);
+        // block everything — no path possible
+        let path = grid.astar(start, goal, |_| false);
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn astar_around_obstacle() {
+        let grid: HexGrid<()> = HexGrid::new(3);
+        let start = Hex::axial(-1, 0);
+        let goal = Hex::axial(1, 0);
+        let wall = Hex::ORIGIN;
+        let path = grid.astar(start, goal, |h| h != wall).unwrap();
+        assert!(!path.contains(&wall));
+        assert_eq!(path.first(), Some(&start));
+        assert_eq!(path.last(), Some(&goal));
+    }
+
+    #[test]
+    fn astar_out_of_bounds() {
+        let grid: HexGrid<()> = HexGrid::new(1);
+        let result = grid.astar(Hex::ORIGIN, Hex::axial(5, 0), |_| true);
+        assert!(result.is_none());
     }
 }
