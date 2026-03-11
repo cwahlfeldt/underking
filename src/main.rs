@@ -8,13 +8,13 @@ use bevy::prelude::*;
 
 #[derive(Resource)]
 pub struct GameSettings {
-    pub selected_hex: Hex,
+    pub selected_hex: Option<Hex>,
 }
 
 fn main() {
     App::new()
         .insert_resource(GameSettings {
-            selected_hex: Hex::ORIGIN,
+            selected_hex: None,
         })
         .add_plugins((DefaultPlugins, MeshPickingPlugin))
         .add_plugins(render::RenderPlugin)

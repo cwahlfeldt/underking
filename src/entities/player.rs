@@ -2,8 +2,9 @@ use bevy::prelude::*;
 
 use crate::{
     GameSettings,
-    components::{Health, HexPosition},
-    hex::{Hex, HexGrid, TileData},
+    components::{Health, HexPosition, MovePath},
+    hex::{HEX_SIZE, Hex, HexGrid, TileData},
+    render::MOVE_SPEED,
 };
 
 pub struct PlayerPlugin;
@@ -18,11 +19,11 @@ impl Plugin for PlayerPlugin {
 #[derive(Component)]
 pub struct Player;
 
-const MOVE_RANGE: i32 = 2;
+const MOVE_RANGE: i32 = 0; // 0 is any tile
 const ATTACK_RANGE: i32 = 1;
 
 fn spawn_player(mut commands: Commands, mut grid: ResMut<HexGrid<TileData>>) {
-    let start_coord = Hex { q: 0, r: -1, s: 1 };
+    let start_coord = Hex { q: 0, r: -4, s: 4 };
 
     let entity = commands
         .spawn((
@@ -53,61 +54,97 @@ fn render_player(mut commands: Commands, query: Query<Entity, Added<Player>>) {
 }
 
 fn move_player(
+    mut commands: Commands,
     mut grid: ResMut<HexGrid<TileData>>,
     game_settings: Res<GameSettings>,
-    mut query: Query<(Entity, &mut HexPosition), With<Player>>,
+    mut query: Query<(Entity, &mut HexPosition, Has<MovePath>), With<Player>>,
 ) {
-    let Ok((entity, mut hex_pos)) = query.single_mut() else {
+    let Ok((entity, mut hex_pos, is_moving)) = query.single_mut() else {
         return;
     };
 
-    let target = game_settings.selected_hex;
+    // Don't start a new move while animating
+    if is_moving {
+        return;
+    }
+
+    let Some(target) = game_settings.selected_hex else {
+        return;
+    };
     if hex_pos.0 == target {
         return;
     }
 
-    let in_move_range = grid
+    let can_move = grid
         .get(target)
-        .map(|t| t.move_ranges.contains(&entity))
+        .map(|t| {
+            t.traversable
+                && t.occupant.is_none()
+                && (MOVE_RANGE == 0 || t.move_ranges.contains(&entity))
+        })
         .unwrap_or(false);
 
-    if !in_move_range {
+    if !can_move {
         return;
     }
 
-    let passable = |h: Hex| grid.get(h).map(|t| t.occupant.is_none()).unwrap_or(false);
+    let path = grid.astar(hex_pos.0, target, |h| {
+        grid.get(h)
+            .map(|t| t.traversable && t.occupant.is_none())
+            .unwrap_or(false)
+    });
 
-    let path = grid.astar(hex_pos.0, target, passable);
     if let Some(path) = path {
-        if let Some(&next) = path.get(1) {
-            let old_pos = hex_pos.0;
-            hex_pos.0 = next;
-
-            // Update occupancy
-            if let Some(tile) = grid.get_mut(old_pos) {
-                tile.occupant = None;
-            }
-            if let Some(tile) = grid.get_mut(next) {
-                tile.occupant = Some(entity);
-            }
-
-            // Recalculate ranges from new position
-            clear_ranges(&mut grid, entity);
-            update_ranges(&mut grid, next, entity);
+        if path.len() < 2 {
+            return;
         }
+
+        let destination = *path.last().unwrap();
+        let old_pos = hex_pos.0;
+
+        // Update hex position and grid state immediately to the destination
+        hex_pos.0 = destination;
+
+        if let Some(tile) = grid.get_mut(old_pos) {
+            tile.occupant = None;
+        }
+        if let Some(tile) = grid.get_mut(destination) {
+            tile.occupant = Some(entity);
+        }
+
+        clear_ranges(&mut grid, entity);
+        update_ranges(&mut grid, destination, entity);
+
+        // Build pixel waypoints for the animation
+        let waypoints: Vec<Vec2> = path
+            .iter()
+            .map(|h| {
+                let (x, y) = h.to_pixel(HEX_SIZE);
+                Vec2::new(x, y)
+            })
+            .collect();
+
+        commands.entity(entity).insert(MovePath {
+            waypoints,
+            current_index: 0,
+            progress: 0.0,
+            speed: MOVE_SPEED,
+        });
     }
 }
 
 fn update_ranges(grid: &mut HexGrid<TileData>, pos: Hex, entity: Entity) {
-    let move_hexes: Vec<Hex> = pos
-        .spiral(MOVE_RANGE)
-        .into_iter()
-        .filter(|&h| h != pos && grid.contains(h))
-        .collect();
+    if MOVE_RANGE > 0 {
+        let move_hexes: Vec<Hex> = pos
+            .spiral(MOVE_RANGE)
+            .into_iter()
+            .filter(|&h| h != pos && grid.contains(h))
+            .collect();
 
-    for hex in move_hexes {
-        if let Some(tile) = grid.get_mut(hex) {
-            tile.move_ranges.push(entity);
+        for hex in move_hexes {
+            if let Some(tile) = grid.get_mut(hex) {
+                tile.move_ranges.push(entity);
+            }
         }
     }
 
