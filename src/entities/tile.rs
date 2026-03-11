@@ -11,7 +11,7 @@ const GAP: f32 = 1.5;
 const TILE_COLOR: Color = Color::srgb(0.2, 0.2, 0.2);
 const WALL_COLOR: Color = Color::srgba(0.2, 0.2, 0.2, 0.2);
 const HIGHLIGHT_COLOR: Color = Color::srgb(0.6, 0.4, 0.15);
-const GRID_RADIUS: i32 = 4;
+pub const GRID_RADIUS: i32 = 4;
 const UNTRAVERSABLE_COUNT: usize = 10;
 
 pub struct TilePlugin;

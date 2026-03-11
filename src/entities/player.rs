@@ -1,7 +1,8 @@
 use bevy::prelude::*;
+use rand::seq::SliceRandom;
 
 use crate::{
-    GameSettings,
+    GameSettings, Turn, TurnState,
     components::{Health, HexPosition, MovePath},
     hex::{HEX_SIZE, Hex, HexGrid, TileData},
     render::MOVE_SPEED,
@@ -22,8 +23,20 @@ pub struct Player;
 const MOVE_RANGE: i32 = 0; // 0 is any tile
 const ATTACK_RANGE: i32 = 1;
 
-fn spawn_player(mut commands: Commands, mut grid: ResMut<HexGrid<TileData>>) {
-    let start_coord = Hex { q: 0, r: -4, s: 4 };
+pub fn spawn_player(mut commands: Commands, mut grid: ResMut<HexGrid<TileData>>) {
+    // Pick a random traversable, unoccupied tile for the player
+    let mut rng = rand::rng();
+    let mut candidates: Vec<Hex> = grid
+        .positions()
+        .into_iter()
+        .filter(|&h| {
+            grid.get(h)
+                .map(|t| t.traversable && t.occupant.is_none())
+                .unwrap_or(false)
+        })
+        .collect();
+    candidates.shuffle(&mut rng);
+    let start_coord = candidates[0];
 
     let entity = commands
         .spawn((
@@ -56,17 +69,18 @@ fn render_player(mut commands: Commands, query: Query<Entity, Added<Player>>) {
 fn move_player(
     mut commands: Commands,
     mut grid: ResMut<HexGrid<TileData>>,
-    game_settings: Res<GameSettings>,
-    mut query: Query<(Entity, &mut HexPosition, Has<MovePath>), With<Player>>,
+    mut turn: ResMut<TurnState>,
+    mut game_settings: ResMut<GameSettings>,
+    mut query: Query<(Entity, &mut HexPosition), With<Player>>,
 ) {
-    let Ok((entity, mut hex_pos, is_moving)) = query.single_mut() else {
-        return;
-    };
-
-    // Don't start a new move while animating
-    if is_moving {
+    // Only act on player's turn
+    if *turn != TurnState::Active(Turn::Player) {
         return;
     }
+
+    let Ok((entity, mut hex_pos)) = query.single_mut() else {
+        return;
+    };
 
     let Some(target) = game_settings.selected_hex else {
         return;
@@ -102,7 +116,6 @@ fn move_player(
         let destination = *path.last().unwrap();
         let old_pos = hex_pos.0;
 
-        // Update hex position and grid state immediately to the destination
         hex_pos.0 = destination;
 
         if let Some(tile) = grid.get_mut(old_pos) {
@@ -115,7 +128,6 @@ fn move_player(
         clear_ranges(&mut grid, entity);
         update_ranges(&mut grid, destination, entity);
 
-        // Build pixel waypoints for the animation
         let waypoints: Vec<Vec2> = path
             .iter()
             .map(|h| {
@@ -130,10 +142,16 @@ fn move_player(
             progress: 0.0,
             speed: MOVE_SPEED,
         });
+
+        // Clear selection and transition to animating → enemy turn next
+        game_settings.selected_hex = None;
+        *turn = TurnState::Animating {
+            next: Turn::Enemy,
+        };
     }
 }
 
-fn update_ranges(grid: &mut HexGrid<TileData>, pos: Hex, entity: Entity) {
+pub fn update_ranges(grid: &mut HexGrid<TileData>, pos: Hex, entity: Entity) {
     if MOVE_RANGE > 0 {
         let move_hexes: Vec<Hex> = pos
             .spiral(MOVE_RANGE)
@@ -161,7 +179,7 @@ fn update_ranges(grid: &mut HexGrid<TileData>, pos: Hex, entity: Entity) {
     }
 }
 
-fn clear_ranges(grid: &mut HexGrid<TileData>, entity: Entity) {
+pub fn clear_ranges(grid: &mut HexGrid<TileData>, entity: Entity) {
     let positions: Vec<Hex> = grid.positions();
     for pos in positions {
         if let Some(tile) = grid.get_mut(pos) {
