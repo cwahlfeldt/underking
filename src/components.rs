@@ -11,6 +11,14 @@ pub struct Health {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HexPosition(pub Hex);
 
+/// Per-entity combat stats. Replaces per-module constants.
+#[derive(Component)]
+pub struct Stats {
+    /// 0 means unlimited range (can move to any reachable tile).
+    pub move_range: i32,
+    pub attack_range: i32,
+}
+
 /// Attached to an entity to animate it along a hex path.
 /// Waypoints are pixel-space (x, y) positions for each hex in the path.
 /// The entity lerps from one waypoint to the next at `speed` pixels/sec.

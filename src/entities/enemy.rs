@@ -3,10 +3,11 @@ use rand::seq::SliceRandom;
 
 use crate::{
     Turn, TurnState,
-    components::{Health, HexPosition, MovePath},
-    entities::player::{Player, clear_ranges, update_ranges},
-    hex::{HEX_SIZE, Hex, HexGrid, TileData},
-    render::{MOVE_SPEED, hex_to_rgb},
+    components::{HexPosition, MovePath, Stats},
+    entities::player::Player,
+    grid::{TileData, clear_ranges, is_passable, update_ranges},
+    hex::{HEX_SIZE, Hex, HexGrid},
+    render::MOVE_SPEED,
 };
 
 pub struct EnemyPlugin;
@@ -26,14 +27,11 @@ impl Plugin for EnemyPlugin {
 #[derive(Component)]
 pub struct Enemy;
 
-/// Tracks which enemies still need to move this turn.
 #[derive(Resource, Default)]
 pub struct EnemyTurnQueue(pub Vec<Entity>);
 
-const ENEMY_COUNT: usize = 3;
-const MOVE_RANGE: i32 = 1;
-const ATTACK_RANGE: i32 = 1;
-const MIN_SPAWN_DISTANCE: i32 = 3;
+const ENEMY_COUNT: usize = 2;
+const MIN_SPAWN_DISTANCE: i32 = 4;
 
 pub fn spawn_enemies(
     mut commands: Commands,
@@ -47,31 +45,33 @@ pub fn spawn_enemies(
 
     let mut rng = rand::rng();
 
-    // Collect traversable, unoccupied tiles at least MIN_SPAWN_DISTANCE from the player
     let mut candidates: Vec<Hex> = grid
         .positions()
         .into_iter()
-        .filter(|&h| {
-            h.distance(player_hex) >= MIN_SPAWN_DISTANCE
-                && grid
-                    .get(h)
-                    .map(|t| t.traversable && t.occupant.is_none())
-                    .unwrap_or(false)
-        })
+        .filter(|&h| h.distance(player_hex) >= MIN_SPAWN_DISTANCE && is_passable(&grid, h))
         .collect();
     candidates.shuffle(&mut rng);
 
     let spawn_count = ENEMY_COUNT.min(candidates.len());
 
+    let stats = Stats {
+        move_range: 1,
+        attack_range: 1,
+    };
+
     for &start_coord in candidates.iter().take(spawn_count) {
         let entity = commands
             .spawn((
                 Enemy,
-                Health {
-                    current: 3.0,
-                    max: 3.0,
+                crate::components::Health {
+                    current: 1.0,
+                    max: 1.0,
                 },
                 HexPosition(start_coord),
+                Stats {
+                    move_range: stats.move_range,
+                    attack_range: stats.attack_range,
+                },
             ))
             .id();
 
@@ -79,29 +79,18 @@ pub fn spawn_enemies(
             tile.occupant = Some(entity);
         }
 
-        let attack_hexes: Vec<Hex> = start_coord
-            .spiral(ATTACK_RANGE)
-            .into_iter()
-            .filter(|&h| h != start_coord && grid.contains(h))
-            .collect();
-
-        for hex in attack_hexes {
-            if let Some(tile) = grid.get_mut(hex) {
-                tile.attack_ranges.push(entity);
-            }
-        }
+        update_ranges(&mut grid, start_coord, entity, &stats);
     }
 
     commands.insert_resource(EnemyTurnQueue::default());
 }
 
 fn render_enemy(mut commands: Commands, query: Query<Entity, Added<Enemy>>) {
-    let (r, g, b) = hex_to_rgb("#c642eb");
     for entity in &query {
         commands.entity(entity).insert((
             Transform::default(),
             Text2d::new("@"),
-            TextColor(Color::srgb(r, g, b)),
+            TextColor(Color::srgb(0.776, 0.259, 0.922)),
         ));
     }
 }
@@ -113,26 +102,21 @@ fn move_enemies(
     mut queue: ResMut<EnemyTurnQueue>,
     animating: Query<(), With<MovePath>>,
     player_query: Query<&HexPosition, With<Player>>,
-    mut enemy_query: Query<(Entity, &mut HexPosition), (With<Enemy>, Without<Player>)>,
+    mut enemy_query: Query<(Entity, &mut HexPosition, &Stats), (With<Enemy>, Without<Player>)>,
 ) {
-    // Only act on enemy's turn
     if *turn != TurnState::Active(Turn::Enemy) {
         return;
     }
 
-    // Wait for any ongoing animation to finish before moving next enemy
     if !animating.is_empty() {
         return;
     }
 
-    // Build the queue on first call of this turn
     if queue.0.is_empty() {
-        queue.0 = enemy_query.iter().map(|(e, _)| e).collect();
+        queue.0 = enemy_query.iter().map(|(e, _, _)| e).collect();
     }
 
-    // Pop next enemy from the queue
     let Some(enemy_entity) = queue.0.pop() else {
-        // All enemies have moved — back to player
         *turn = TurnState::Active(Turn::Player);
         return;
     };
@@ -143,28 +127,25 @@ fn move_enemies(
     };
     let player_hex = player_pos.0;
 
-    let Ok((entity, mut hex_pos)) = enemy_query.get_mut(enemy_entity) else {
-        // Entity gone, move on to next
+    let Ok((entity, mut hex_pos, stats)) = enemy_query.get_mut(enemy_entity) else {
         return;
     };
 
     let current = hex_pos.0;
 
-    // Try to pathfind toward the player
+    // Pathfind toward the player (allow player's tile as goal)
     let path = grid.astar(current, player_hex, |h| {
         if h == player_hex {
             return true;
         }
-        grid.get(h)
-            .map(|t| t.traversable && t.occupant.is_none())
-            .unwrap_or(false)
+        is_passable(&grid, h)
     });
 
     let mut destination = current;
     let mut move_path = vec![current];
 
     if let Some(path) = &path {
-        let steps = (path.len() - 1).min(MOVE_RANGE as usize);
+        let steps = (path.len() - 1).min(stats.move_range as usize);
         for i in 1..=steps {
             let candidate = path[i];
             let occupied = grid
@@ -179,16 +160,12 @@ fn move_enemies(
         }
     }
 
-    // Fallback: if can't move toward player, pick a random traversable neighbor
+    // Fallback: random traversable neighbor
     if destination == current {
         let mut neighbors: Vec<Hex> = grid
             .neighbors(current)
             .into_iter()
-            .filter(|&h| {
-                grid.get(h)
-                    .map(|t| t.traversable && t.occupant.is_none())
-                    .unwrap_or(false)
-            })
+            .filter(|&h| is_passable(&grid, h))
             .collect();
         let mut rng = rand::rng();
         neighbors.shuffle(&mut rng);
@@ -199,9 +176,11 @@ fn move_enemies(
     }
 
     if destination != current {
+        // Update grid state directly (can't use move_entity for enemy mid-queue)
+        let old_pos = hex_pos.0;
         hex_pos.0 = destination;
 
-        if let Some(tile) = grid.get_mut(current) {
+        if let Some(tile) = grid.get_mut(old_pos) {
             tile.occupant = None;
         }
         if let Some(tile) = grid.get_mut(destination) {
@@ -209,7 +188,7 @@ fn move_enemies(
         }
 
         clear_ranges(&mut grid, entity);
-        update_ranges(&mut grid, destination, entity);
+        update_ranges(&mut grid, destination, entity, stats);
 
         let waypoints: Vec<Vec2> = move_path
             .iter()
@@ -227,17 +206,11 @@ fn move_enemies(
         });
     }
 
-    // If there are more enemies in the queue, stay on enemy turn (animation check will gate next move)
-    // If queue is empty, transition to player turn
     if queue.0.is_empty() {
         if destination != current {
-            // Last enemy moved with animation — wait for it
-            *turn = TurnState::Animating {
-                next: Turn::Player,
-            };
+            *turn = TurnState::Animating { next: Turn::Player };
         } else {
             *turn = TurnState::Active(Turn::Player);
         }
     }
-    // Otherwise stay in Active(Enemy) — next frame will wait for animation then move next enemy
 }

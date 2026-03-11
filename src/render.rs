@@ -50,6 +50,72 @@ pub fn ease_in_out_cubic(t: f32) -> f32 {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn easing_boundaries() {
+        let fns: &[(&str, fn(f32) -> f32)] = &[
+            ("linear", ease_linear),
+            ("in_quad", ease_in_quad),
+            ("out_quad", ease_out_quad),
+            ("in_out_quad", ease_in_out_quad),
+            ("in_cubic", ease_in_cubic),
+            ("out_cubic", ease_out_cubic),
+            ("in_out_cubic", ease_in_out_cubic),
+        ];
+
+        for (name, f) in fns {
+            let at_0 = f(0.0);
+            let at_1 = f(1.0);
+            assert!(
+                at_0.abs() < 1e-6,
+                "{name}: f(0) = {at_0}, expected 0"
+            );
+            assert!(
+                (at_1 - 1.0).abs() < 1e-6,
+                "{name}: f(1) = {at_1}, expected 1"
+            );
+        }
+    }
+
+    #[test]
+    fn easing_monotonic() {
+        let fns: &[fn(f32) -> f32] = &[
+            ease_linear,
+            ease_in_quad,
+            ease_out_quad,
+            ease_in_out_quad,
+            ease_in_cubic,
+            ease_out_cubic,
+            ease_in_out_cubic,
+        ];
+
+        for f in fns {
+            let mut prev = f(0.0);
+            for i in 1..=100 {
+                let t = i as f32 / 100.0;
+                let val = f(t);
+                assert!(val >= prev - 1e-6, "easing not monotonic at t={t}");
+                prev = val;
+            }
+        }
+    }
+
+    #[test]
+    fn ease_in_out_symmetric() {
+        for f in [ease_in_out_quad, ease_in_out_cubic] {
+            let a = f(0.25);
+            let b = f(0.75);
+            assert!(
+                (a + b - 1.0).abs() < 1e-6,
+                "in_out not symmetric: f(0.25)={a}, f(0.75)={b}"
+            );
+        }
+    }
+}
+
 pub struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
@@ -129,15 +195,3 @@ fn animate_movement(
     }
 }
 
-pub fn hex_to_rgb(hex: &str) -> (f32, f32, f32) {
-    if hex.len() != 7 || !hex.starts_with('#') {
-        panic!("Invalid hex color: {hex}. Expected format: #RRGGBB");
-    }
-
-    let hex = hex.trim_start_matches("#");
-    let r = u8::from_str_radix(&hex[0..2], 16).unwrap() as f32 / 255.0;
-    let g = u8::from_str_radix(&hex[2..4], 16).unwrap() as f32 / 255.0;
-    let b = u8::from_str_radix(&hex[4..6], 16).unwrap() as f32 / 255.0;
-
-    (r, g, b)
-}

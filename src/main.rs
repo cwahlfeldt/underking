@@ -1,5 +1,6 @@
 mod components;
 mod entities;
+mod grid;
 mod hex;
 mod render;
 
@@ -10,6 +11,7 @@ use bevy::prelude::*;
 #[derive(Resource)]
 pub struct GameSettings {
     pub selected_hex: Option<Hex>,
+    pub hovered_enemy: Option<Entity>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,6 +32,7 @@ fn main() {
     App::new()
         .insert_resource(GameSettings {
             selected_hex: None,
+            hovered_enemy: None,
         })
         .insert_resource(TurnState::Active(Turn::Player))
         .add_plugins((DefaultPlugins, MeshPickingPlugin))

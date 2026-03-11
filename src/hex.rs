@@ -1,30 +1,9 @@
-use bevy::prelude::{Entity, Resource};
+use bevy::prelude::Resource;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::ops::{Add, Neg, Sub};
 
 pub const HEX_SIZE: f32 = 40.0;
-
-#[derive(Debug, Clone)]
-pub struct TileData {
-    pub tile_entity: Option<Entity>,
-    pub occupant: Option<Entity>,
-    pub traversable: bool,
-    pub attack_ranges: Vec<Entity>,
-    pub move_ranges: Vec<Entity>,
-}
-
-impl Default for TileData {
-    fn default() -> Self {
-        Self {
-            tile_entity: None,
-            occupant: None,
-            traversable: true,
-            attack_ranges: Vec::new(),
-            move_ranges: Vec::new(),
-        }
-    }
-}
 
 /// Cube coordinate on a hex grid.
 ///
