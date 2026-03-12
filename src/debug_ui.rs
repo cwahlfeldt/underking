@@ -158,9 +158,13 @@ fn update_debug_panel(
         TurnState::Active(crate::Turn::Player) => "PLAYER'S TURN",
         TurnState::Active(crate::Turn::Enemy) => "ENEMY TURN",
         TurnState::Animating { next } => match next {
-            crate::Turn::Player => "ANIMATING -> Player",
-            crate::Turn::Enemy => "ANIMATING -> Enemy",
+            crate::TurnPhase::Turn(crate::Turn::Player) => "ANIMATING -> Player",
+            crate::TurnPhase::Turn(crate::Turn::Enemy) => "ANIMATING -> Enemy",
+            crate::TurnPhase::Combat(crate::CombatPhase::AfterPlayerMove) => "ANIMATING -> Combat (Player)",
+            crate::TurnPhase::Combat(crate::CombatPhase::AfterEnemyMove) => "ANIMATING -> Combat (Enemy)",
         },
+        TurnState::Combat(crate::CombatPhase::AfterPlayerMove) => "COMBAT (After Player)",
+        TurnState::Combat(crate::CombatPhase::AfterEnemyMove) => "COMBAT (After Enemy)",
     };
     lines.push(format!("--- {turn_label} ---\n"));
 

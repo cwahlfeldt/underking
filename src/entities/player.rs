@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
 use crate::{
-    GameSettings, Turn, TurnState,
+    CombatPhase, GameSettings, Turn, TurnPhase, TurnState,
     components::{HexPosition, Stats},
     grid::{TileData, is_passable, move_entity, update_ranges},
     hex::{Hex, HexGrid},
@@ -117,6 +117,7 @@ fn handle_player_move(
         move_order.0.push(entity);
 
         game_settings.selected_hex = None;
+        game_settings.player_prev_hex = Some(hex_pos.0);
         move_entity(
             &mut commands,
             &mut grid,
@@ -125,7 +126,7 @@ fn handle_player_move(
             &mut hex_pos,
             &path,
             stats,
-            Turn::Enemy,
+            TurnPhase::Combat(CombatPhase::AfterPlayerMove),
         );
     }
 }

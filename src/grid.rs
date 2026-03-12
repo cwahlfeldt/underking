@@ -4,7 +4,7 @@ use crate::{
     components::{HexPosition, MovePath, Stats},
     hex::{HEX_SIZE, Hex, HexGrid},
     render::MOVE_SPEED,
-    Turn, TurnState,
+    TurnPhase, TurnState,
 };
 
 /// Per-cell game state stored in the hex grid.
@@ -230,7 +230,7 @@ pub fn move_entity(
     hex_pos: &mut HexPosition,
     path: &[Hex],
     stats: &Stats,
-    next_turn: Turn,
+    next_phase: TurnPhase,
 ) {
     if path.len() < 2 {
         return;
@@ -266,5 +266,5 @@ pub fn move_entity(
         speed: MOVE_SPEED,
     });
 
-    *turn = TurnState::Animating { next: next_turn };
+    *turn = TurnState::Animating { next: next_phase };
 }

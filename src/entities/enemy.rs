@@ -2,8 +2,8 @@ use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
 use crate::{
-    Turn, TurnState,
-    components::{HexPosition, MovePath, Stats},
+    Turn, TurnPhase, TurnState,
+    components::{Dead, HexPosition, MovePath, SkipTurn, Stats},
     entities::player::Player,
     grid::{TileData, clear_ranges, is_passable, update_ranges},
     hex::{HEX_SIZE, Hex, HexGrid},
@@ -103,7 +103,7 @@ fn move_enemies(
     mut move_order: ResMut<crate::undo::TurnMoveOrder>,
     animating: Query<(), With<MovePath>>,
     player_query: Query<&HexPosition, With<Player>>,
-    mut enemy_query: Query<(Entity, &mut HexPosition, &Stats), (With<Enemy>, Without<Player>)>,
+    mut enemy_query: Query<(Entity, &mut HexPosition, &Stats, Option<&SkipTurn>), (With<Enemy>, Without<Player>, Without<Dead>)>,
 ) {
     if *turn != TurnState::Active(Turn::Enemy) {
         return;
@@ -114,7 +114,7 @@ fn move_enemies(
     }
 
     if queue.0.is_empty() {
-        queue.0 = enemy_query.iter().map(|(e, _, _)| e).collect();
+        queue.0 = enemy_query.iter().map(|(e, _, _, _)| e).collect();
     }
 
     let Some(enemy_entity) = queue.0.pop() else {
@@ -128,9 +128,20 @@ fn move_enemies(
     };
     let player_hex = player_pos.0;
 
-    let Ok((entity, mut hex_pos, stats)) = enemy_query.get_mut(enemy_entity) else {
+    let Ok((entity, mut hex_pos, stats, skip)) = enemy_query.get_mut(enemy_entity) else {
+        // Entity may have been despawned (killed) - skip it
         return;
     };
+
+    // Rule 4: enemies that already attacked the player skip their movement.
+    if skip.is_some() {
+        commands.entity(entity).remove::<SkipTurn>();
+        // Check if queue is empty to advance turn
+        if queue.0.is_empty() {
+            *turn = TurnState::Active(Turn::Player);
+        }
+        return;
+    }
 
     let current = hex_pos.0;
 
@@ -212,7 +223,7 @@ fn move_enemies(
 
     if queue.0.is_empty() {
         if destination != current {
-            *turn = TurnState::Animating { next: Turn::Player };
+            *turn = TurnState::Animating { next: TurnPhase::Turn(Turn::Player) };
         } else {
             *turn = TurnState::Active(Turn::Player);
         }

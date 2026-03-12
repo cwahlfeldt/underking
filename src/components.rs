@@ -30,6 +30,16 @@ pub struct MovePath {
     pub speed: f32,
 }
 
+/// Marker: this enemy attacked the player after the player moved,
+/// so it should skip its movement this turn (Rule 4).
+#[derive(Component)]
+pub struct SkipTurn;
+
+/// Marker: entity is dead. Hidden visually, cleared from grid occupancy/ranges,
+/// but not despawned so undo can restore it.
+#[derive(Component)]
+pub struct Dead;
+
 /// Like MovePath but for undo/redo visual transitions.
 /// Doesn't interact with turn logic (check_animation_done ignores it).
 #[derive(Component)]

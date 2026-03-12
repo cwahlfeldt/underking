@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::{
     TurnState,
-    components::{HexPosition, MovePath, RewindPath},
+    components::{Dead, HexPosition, MovePath, RewindPath},
     entities::enemy::EnemyTurnQueue,
     grid::TileData,
     hex::{HEX_SIZE, Hex, HexGrid},
@@ -298,6 +298,8 @@ fn apply_undo_action(
     mut transform_query: Query<&mut Transform>,
     animating: Query<Entity, With<MovePath>>,
     rewinding: Query<Entity, With<RewindPath>>,
+    dead_query: Query<Entity, With<Dead>>,
+    enemy_query: Query<Entity, With<crate::entities::enemy::Enemy>>,
 ) {
     if *action == UndoAction::None {
         return;
@@ -348,6 +350,33 @@ fn apply_undo_action(
 
     // Restore grid, hex positions, and turn state from snapshot
     restore_snapshot(&snapshot, &mut grid, &mut turn, &mut position_query);
+
+    // Sync Dead state with snapshot occupancy.
+    let snapshot_occupants: Vec<Entity> = grid
+        .positions()
+        .iter()
+        .filter_map(|pos| grid.get(*pos).and_then(|t| t.occupant))
+        .collect();
+
+    // Revive dead entities that are occupants in the snapshot
+    for entity in &dead_query {
+        if snapshot_occupants.contains(&entity) {
+            commands
+                .entity(entity)
+                .remove::<Dead>()
+                .insert(Visibility::Inherited);
+        }
+    }
+
+    // Kill alive entities that are NOT occupants in the snapshot
+    // (they were killed in the state we're restoring to)
+    for entity in enemy_query.iter() {
+        if !snapshot_occupants.contains(&entity) && dead_query.get(entity).is_err() {
+            commands
+                .entity(entity)
+                .insert((Dead, Visibility::Hidden));
+        }
+    }
 
     // Build per-entity animation entries
     let mut anim_map: Vec<(Entity, Vec2, Vec2)> = Vec::new();
