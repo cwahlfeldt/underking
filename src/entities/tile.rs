@@ -12,7 +12,7 @@ use crate::{
 const GAP: f32 = 1.5;
 const TILE_COLOR: Color = Color::srgb(0.2, 0.2, 0.2);
 const WALL_COLOR: Color = Color::srgba(0.2, 0.2, 0.2, 0.2);
-const HIGHLIGHT_COLOR: Color = Color::srgb(0.6, 0.4, 0.15);
+const HIGHLIGHT_COLOR: Color = Color::srgba(0.2, 0.2, 0.8, 0.8);
 const ATTACK_RANGE_COLOR: Color = Color::srgb(0.6, 0.15, 0.15);
 pub const GRID_RADIUS: i32 = 4;
 const UNTRAVERSABLE_COUNT: usize = 10;
@@ -191,10 +191,7 @@ fn show_enemy_attack_range(
 
     for (hex_pos, mut mat_handle, rest) in &mut tile_query {
         let is_in_range = highlighted_hexes.contains(&hex_pos.0);
-        let is_traversable = grid
-            .get(hex_pos.0)
-            .map(|t| t.traversable)
-            .unwrap_or(true);
+        let is_traversable = grid.get(hex_pos.0).map(|t| t.traversable).unwrap_or(true);
 
         if !is_traversable {
             continue;
