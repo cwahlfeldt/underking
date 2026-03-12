@@ -3,8 +3,7 @@ use bevy::prelude::*;
 use crate::{
     components::{HexPosition, MovePath, Stats},
     hex::{HEX_SIZE, Hex, HexGrid},
-    render::MOVE_SPEED,
-    TurnPhase, TurnState,
+    turn::{TurnPhase, TurnState},
 };
 
 /// Per-cell game state stored in the hex grid.
@@ -74,6 +73,57 @@ pub fn clear_ranges(grid: &mut HexGrid<TileData>, entity: Entity) {
             tile.attack_ranges.retain(|&e| e != entity);
         }
     }
+}
+
+/// Move an entity from its current hex to `destination` along `path`.
+/// Updates grid occupancy, ranges, and inserts a `MovePath` for animation.
+/// Sets `turn` to `Animating { next }`.
+pub fn move_entity(
+    commands: &mut Commands,
+    grid: &mut HexGrid<TileData>,
+    turn: &mut TurnState,
+    entity: Entity,
+    hex_pos: &mut HexPosition,
+    path: &[Hex],
+    stats: &Stats,
+    speed: f32,
+    next_phase: TurnPhase,
+) {
+    if path.len() < 2 {
+        return;
+    }
+
+    let old_pos = hex_pos.0;
+    let destination = *path.last().unwrap();
+
+    hex_pos.0 = destination;
+
+    if let Some(tile) = grid.get_mut(old_pos) {
+        tile.occupant = None;
+    }
+    if let Some(tile) = grid.get_mut(destination) {
+        tile.occupant = Some(entity);
+    }
+
+    clear_ranges(grid, entity);
+    update_ranges(grid, destination, entity, stats);
+
+    let waypoints: Vec<Vec2> = path
+        .iter()
+        .map(|h| {
+            let (x, y) = h.to_pixel(HEX_SIZE);
+            Vec2::new(x, y)
+        })
+        .collect();
+
+    commands.entity(entity).insert(MovePath {
+        waypoints,
+        current_index: 0,
+        progress: 0.0,
+        speed,
+    });
+
+    *turn = TurnState::Animating { next: next_phase };
 }
 
 #[cfg(test)]
@@ -217,54 +267,4 @@ mod tests {
         });
         assert!(has_e2);
     }
-}
-
-/// Move an entity from its current hex to `destination` along `path`.
-/// Updates grid occupancy, ranges, and inserts a `MovePath` for animation.
-/// Sets `turn` to `Animating { next }`.
-pub fn move_entity(
-    commands: &mut Commands,
-    grid: &mut HexGrid<TileData>,
-    turn: &mut TurnState,
-    entity: Entity,
-    hex_pos: &mut HexPosition,
-    path: &[Hex],
-    stats: &Stats,
-    next_phase: TurnPhase,
-) {
-    if path.len() < 2 {
-        return;
-    }
-
-    let old_pos = hex_pos.0;
-    let destination = *path.last().unwrap();
-
-    hex_pos.0 = destination;
-
-    if let Some(tile) = grid.get_mut(old_pos) {
-        tile.occupant = None;
-    }
-    if let Some(tile) = grid.get_mut(destination) {
-        tile.occupant = Some(entity);
-    }
-
-    clear_ranges(grid, entity);
-    update_ranges(grid, destination, entity, stats);
-
-    let waypoints: Vec<Vec2> = path
-        .iter()
-        .map(|h| {
-            let (x, y) = h.to_pixel(HEX_SIZE);
-            Vec2::new(x, y)
-        })
-        .collect();
-
-    commands.entity(entity).insert(MovePath {
-        waypoints,
-        current_index: 0,
-        progress: 0.0,
-        speed: MOVE_SPEED,
-    });
-
-    *turn = TurnState::Animating { next: next_phase };
 }

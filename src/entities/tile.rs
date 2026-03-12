@@ -2,11 +2,11 @@ use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
 use crate::{
-    GameSettings,
     components::HexPosition,
     entities::enemy::Enemy,
     grid::TileData,
     hex::{HEX_SIZE, Hex, HexGrid},
+    turn::GameSettings,
 };
 
 const GAP: f32 = 1.5;

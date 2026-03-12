@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 
 use crate::{
-    TurnState,
     components::{Dead, HexPosition, MovePath, RewindPath},
     entities::enemy::EnemyTurnQueue,
     grid::TileData,
     hex::{HEX_SIZE, Hex, HexGrid},
+    turn::{Turn, TurnState},
 };
 
 pub struct UndoPlugin;
@@ -452,7 +452,7 @@ fn apply_undo_action(
     }
 
     // Always return to player's turn after undo/redo so enemy AI doesn't re-trigger
-    *turn = TurnState::Active(crate::Turn::Player);
+    *turn = TurnState::Active(Turn::Player);
 
     let label = if is_undo { "Undo" } else { "Redo" };
     info!(
@@ -534,7 +534,7 @@ mod tests {
 
         grid.get_mut(origin).unwrap().occupant = Some(e);
 
-        let turn = TurnState::Active(crate::Turn::Player);
+        let turn = TurnState::Active(Turn::Player);
         let move_order = TurnMoveOrder::default();
         let snap = capture_snapshot(&grid, &turn, &move_order);
 
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn push_undo_clears_redo() {
         let grid = make_grid();
-        let turn = TurnState::Active(crate::Turn::Player);
+        let turn = TurnState::Active(Turn::Player);
         let move_order = TurnMoveOrder::default();
         let snap = capture_snapshot(&grid, &turn, &move_order);
 
@@ -565,8 +565,8 @@ mod tests {
     #[test]
     fn undo_stack_ordering() {
         let grid = make_grid();
-        let turn_p = TurnState::Active(crate::Turn::Player);
-        let turn_e = TurnState::Active(crate::Turn::Enemy);
+        let turn_p = TurnState::Active(Turn::Player);
+        let turn_e = TurnState::Active(Turn::Enemy);
         let move_order = TurnMoveOrder::default();
 
         let snap1 = capture_snapshot(&grid, &turn_p, &move_order);

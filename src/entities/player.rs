@@ -2,10 +2,11 @@ use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
 use crate::{
-    CombatPhase, GameSettings, Turn, TurnPhase, TurnState,
-    components::{HexPosition, Stats},
+    components::{Health, HexPosition, Stats},
     grid::{TileData, is_passable, move_entity, update_ranges},
     hex::{Hex, HexGrid},
+    render::MOVE_SPEED,
+    turn::{CombatPhase, GameSettings, Turn, TurnPhase, TurnState},
 };
 
 pub struct PlayerPlugin;
@@ -38,12 +39,15 @@ pub fn spawn_player(mut commands: Commands, mut grid: ResMut<HexGrid<TileData>>)
     let entity = commands
         .spawn((
             Player,
-            crate::components::Health {
+            Health {
                 current: 3.0,
                 max: 3.0,
             },
             HexPosition(start_coord),
-            stats,
+            Stats {
+                move_range: stats.move_range,
+                attack_range: stats.attack_range,
+            },
         ))
         .id();
 
@@ -51,11 +55,7 @@ pub fn spawn_player(mut commands: Commands, mut grid: ResMut<HexGrid<TileData>>)
         tile.occupant = Some(entity);
     }
 
-    let stats_ref = Stats {
-        move_range: 1,
-        attack_range: 1,
-    };
-    update_ranges(&mut grid, start_coord, entity, &stats_ref);
+    update_ranges(&mut grid, start_coord, entity, &stats);
 }
 
 fn render_player(mut commands: Commands, query: Query<Entity, Added<Player>>) {
@@ -108,11 +108,9 @@ fn handle_player_move(
     let path = grid.astar(hex_pos.0, target, |h| is_passable(&grid, h));
 
     if let Some(path) = path {
-        // Snapshot before move
         let snapshot = crate::undo::capture_snapshot(&grid, &turn, &move_order);
         crate::undo::push_undo(&mut history, snapshot);
 
-        // Start tracking move order for this turn sequence
         move_order.0.clear();
         move_order.0.push(entity);
 
@@ -126,6 +124,7 @@ fn handle_player_move(
             &mut hex_pos,
             &path,
             stats,
+            MOVE_SPEED,
             TurnPhase::Combat(CombatPhase::AfterPlayerMove),
         );
     }

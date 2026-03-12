@@ -2,12 +2,12 @@ use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
 use crate::{
-    Turn, TurnPhase, TurnState,
-    components::{Dead, HexPosition, MovePath, SkipTurn, Stats},
+    components::{Dead, HexPosition, Health, MovePath, SkipTurn, Stats},
     entities::player::Player,
     grid::{TileData, clear_ranges, is_passable, update_ranges},
     hex::{HEX_SIZE, Hex, HexGrid},
     render::MOVE_SPEED,
+    turn::{Turn, TurnPhase, TurnState},
 };
 
 pub struct EnemyPlugin;
@@ -54,16 +54,16 @@ pub fn spawn_enemies(
 
     let spawn_count = ENEMY_COUNT.min(candidates.len());
 
-    let stats = Stats {
-        move_range: 1,
-        attack_range: 1,
-    };
-
     for &start_coord in candidates.iter().take(spawn_count) {
+        let stats = Stats {
+            move_range: 1,
+            attack_range: 1,
+        };
+
         let entity = commands
             .spawn((
                 Enemy,
-                crate::components::Health {
+                Health {
                     current: 1.0,
                     max: 1.0,
                 },
@@ -103,7 +103,10 @@ fn move_enemies(
     mut move_order: ResMut<crate::undo::TurnMoveOrder>,
     animating: Query<(), With<MovePath>>,
     player_query: Query<&HexPosition, With<Player>>,
-    mut enemy_query: Query<(Entity, &mut HexPosition, &Stats, Option<&SkipTurn>), (With<Enemy>, Without<Player>, Without<Dead>)>,
+    mut enemy_query: Query<
+        (Entity, &mut HexPosition, &Stats, Option<&SkipTurn>),
+        (With<Enemy>, Without<Player>, Without<Dead>),
+    >,
 ) {
     if *turn != TurnState::Active(Turn::Enemy) {
         return;
@@ -129,14 +132,12 @@ fn move_enemies(
     let player_hex = player_pos.0;
 
     let Ok((entity, mut hex_pos, stats, skip)) = enemy_query.get_mut(enemy_entity) else {
-        // Entity may have been despawned (killed) - skip it
         return;
     };
 
     // Rule 4: enemies that already attacked the player skip their movement.
     if skip.is_some() {
         commands.entity(entity).remove::<SkipTurn>();
-        // Check if queue is empty to advance turn
         if queue.0.is_empty() {
             *turn = TurnState::Active(Turn::Player);
         }
@@ -188,10 +189,11 @@ fn move_enemies(
     }
 
     if destination != current {
-        // Record this enemy's move in the turn order
         move_order.0.push(entity);
 
-        // Update grid state directly (can't use move_entity for enemy mid-queue)
+        // Update grid state directly (can't use move_entity helper because
+        // enemies move sequentially mid-queue and we don't want to set
+        // TurnState to Animating until the last enemy).
         let old_pos = hex_pos.0;
         hex_pos.0 = destination;
 
@@ -223,7 +225,9 @@ fn move_enemies(
 
     if queue.0.is_empty() {
         if destination != current {
-            *turn = TurnState::Animating { next: TurnPhase::Turn(Turn::Player) };
+            *turn = TurnState::Animating {
+                next: TurnPhase::Turn(Turn::Player),
+            };
         } else {
             *turn = TurnState::Active(Turn::Player);
         }

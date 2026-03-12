@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 
 use crate::{
-    TurnState,
     components::{HexPosition, Stats},
     entities::{enemy::Enemy, player::Player},
     grid::TileData,
     hex::{HEX_SIZE, HexGrid},
+    turn::{CombatPhase, Turn, TurnPhase, TurnState},
     undo::UndoHistory,
 };
 
@@ -155,16 +155,16 @@ fn update_debug_panel(
     let mut lines = Vec::new();
 
     let turn_label = match *turn {
-        TurnState::Active(crate::Turn::Player) => "PLAYER'S TURN",
-        TurnState::Active(crate::Turn::Enemy) => "ENEMY TURN",
+        TurnState::Active(Turn::Player) => "PLAYER'S TURN",
+        TurnState::Active(Turn::Enemy) => "ENEMY TURN",
         TurnState::Animating { next } => match next {
-            crate::TurnPhase::Turn(crate::Turn::Player) => "ANIMATING -> Player",
-            crate::TurnPhase::Turn(crate::Turn::Enemy) => "ANIMATING -> Enemy",
-            crate::TurnPhase::Combat(crate::CombatPhase::AfterPlayerMove) => "ANIMATING -> Combat (Player)",
-            crate::TurnPhase::Combat(crate::CombatPhase::AfterEnemyMove) => "ANIMATING -> Combat (Enemy)",
+            TurnPhase::Turn(Turn::Player) => "ANIMATING -> Player",
+            TurnPhase::Turn(Turn::Enemy) => "ANIMATING -> Enemy",
+            TurnPhase::Combat(CombatPhase::AfterPlayerMove) => "ANIMATING -> Combat (Player)",
+            TurnPhase::Combat(CombatPhase::AfterEnemyMove) => "ANIMATING -> Combat (Enemy)",
         },
-        TurnState::Combat(crate::CombatPhase::AfterPlayerMove) => "COMBAT (After Player)",
-        TurnState::Combat(crate::CombatPhase::AfterEnemyMove) => "COMBAT (After Enemy)",
+        TurnState::Combat(CombatPhase::AfterPlayerMove) => "COMBAT (After Player)",
+        TurnState::Combat(CombatPhase::AfterEnemyMove) => "COMBAT (After Enemy)",
     };
     lines.push(format!("--- {turn_label} ---\n"));
 
