@@ -29,3 +29,13 @@ pub struct MovePath {
     pub progress: f32,
     pub speed: f32,
 }
+
+/// Like MovePath but for undo/redo visual transitions.
+/// Doesn't interact with turn logic (check_animation_done ignores it).
+#[derive(Component)]
+pub struct RewindPath {
+    pub from: Vec2,
+    pub to: Vec2,
+    pub progress: f32,
+    pub speed: f32,
+}

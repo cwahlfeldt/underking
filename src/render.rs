@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::components::{HexPosition, MovePath};
+use crate::components::{HexPosition, MovePath, RewindPath};
 use crate::hex::HEX_SIZE;
 
 /// Pixels per second for movement along the path.
@@ -122,7 +122,7 @@ impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             PostUpdate,
-            (animate_movement, sync_hex_to_transform).chain(),
+            (animate_movement, animate_rewind, sync_hex_to_transform).chain(),
         );
     }
 }
@@ -133,6 +133,7 @@ fn sync_hex_to_transform(
         (
             Or<(Changed<HexPosition>, Added<Transform>)>,
             Without<MovePath>,
+            Without<RewindPath>,
         ),
     >,
 ) {
@@ -191,6 +192,32 @@ fn animate_movement(
             transform.rotation = transform
                 .rotation
                 .slerp(target_rot, (turn_speed * time.delta_secs()).min(1.0));
+        }
+    }
+}
+
+fn animate_rewind(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut query: Query<(Entity, &mut Transform, &mut RewindPath)>,
+) {
+    for (entity, mut transform, mut rewind) in &mut query {
+        let distance = rewind.from.distance(rewind.to);
+        if distance > 0.0 {
+            rewind.progress += time.delta_secs() * rewind.speed / distance;
+        } else {
+            rewind.progress = 1.0;
+        }
+
+        if rewind.progress >= 1.0 {
+            transform.translation.x = rewind.to.x;
+            transform.translation.y = rewind.to.y;
+            commands.entity(entity).remove::<RewindPath>();
+        } else {
+            let t = EASE_FN(rewind.progress);
+            let pos = rewind.from.lerp(rewind.to, t);
+            transform.translation.x = pos.x;
+            transform.translation.y = pos.y;
         }
     }
 }

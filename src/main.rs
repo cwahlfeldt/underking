@@ -1,11 +1,14 @@
 mod components;
+mod debug_ui;
 mod entities;
 mod grid;
 mod hex;
 mod render;
+mod undo;
 
 use crate::components::MovePath;
 use crate::hex::Hex;
+use bevy::dev_tools::fps_overlay::FpsOverlayPlugin;
 use bevy::prelude::*;
 
 #[derive(Resource)]
@@ -35,11 +38,17 @@ fn main() {
             hovered_enemy: None,
         })
         .insert_resource(TurnState::Active(Turn::Player))
-        .add_plugins((DefaultPlugins, MeshPickingPlugin))
+        .add_plugins((
+            DefaultPlugins,
+            MeshPickingPlugin,
+            // FpsOverlayPlugin::default(),
+        ))
         .add_plugins(render::RenderPlugin)
         .add_plugins(entities::tile::TilePlugin)
         .add_plugins(entities::player::PlayerPlugin)
         .add_plugins(entities::enemy::EnemyPlugin)
+        .add_plugins(debug_ui::DebugUiPlugin)
+        .add_plugins(undo::UndoPlugin)
         .add_systems(Update, check_animation_done)
         .add_systems(Startup, setup)
         .run();
@@ -50,10 +59,7 @@ fn setup(mut commands: Commands) {
 }
 
 /// When all MovePath animations finish, advance to the next turn.
-fn check_animation_done(
-    mut turn: ResMut<TurnState>,
-    animating: Query<(), With<MovePath>>,
-) {
+fn check_animation_done(mut turn: ResMut<TurnState>, animating: Query<(), With<MovePath>>) {
     let TurnState::Animating { next } = *turn else {
         return;
     };
