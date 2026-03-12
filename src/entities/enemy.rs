@@ -3,7 +3,8 @@ use rand::seq::SliceRandom;
 
 use crate::{
     Turn, TurnState,
-    components::{HexPosition, MovePath, Stats},
+    combat::CombatState,
+    components::{Health, HexPosition, MovePath, Stats},
     entities::player::Player,
     grid::{TileData, clear_ranges, is_passable, update_ranges},
     hex::{HEX_SIZE, Hex, HexGrid},
@@ -63,7 +64,7 @@ pub fn spawn_enemies(
         let entity = commands
             .spawn((
                 Enemy,
-                crate::components::Health {
+                Health {
                     current: 1.0,
                     max: 1.0,
                 },
@@ -101,8 +102,9 @@ fn move_enemies(
     mut turn: ResMut<TurnState>,
     mut queue: ResMut<EnemyTurnQueue>,
     mut move_order: ResMut<crate::undo::TurnMoveOrder>,
+    mut combat_state: ResMut<CombatState>,
     animating: Query<(), With<MovePath>>,
-    player_query: Query<&HexPosition, With<Player>>,
+    mut player_query: Query<(&HexPosition, &mut Health), With<Player>>,
     mut enemy_query: Query<(Entity, &mut HexPosition, &Stats), (With<Enemy>, Without<Player>)>,
 ) {
     if *turn != TurnState::Active(Turn::Enemy) {
@@ -113,8 +115,42 @@ fn move_enemies(
         return;
     }
 
+    // First frame of the enemy turn: check if any enemy's attack range covers the
+    // player's current tile. Those enemies attack the player and skip their move.
+    if !combat_state.enemy_counter_attacks_done {
+        combat_state.enemy_counter_attacks_done = true;
+
+        if let Ok((player_pos, mut player_health)) = player_query.single_mut() {
+            let player_hex = player_pos.0;
+            let attackers: Vec<Entity> = grid
+                .get(player_hex)
+                .map(|t| {
+                    t.attack_ranges
+                        .iter()
+                        .copied()
+                        .filter(|&e| enemy_query.contains(e))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            for attacker in attackers {
+                player_health.current -= 1.0;
+                combat_state.attacked_enemies.insert(attacker);
+            }
+        }
+    }
+
     if queue.0.is_empty() {
-        queue.0 = enemy_query.iter().map(|(e, _, _)| e).collect();
+        queue.0 = enemy_query
+            .iter()
+            .map(|(e, _, _)| e)
+            .filter(|e| !combat_state.attacked_enemies.contains(e))
+            .collect();
+
+        if queue.0.is_empty() {
+            *turn = TurnState::Active(Turn::Player);
+            return;
+        }
     }
 
     let Some(enemy_entity) = queue.0.pop() else {
@@ -122,11 +158,13 @@ fn move_enemies(
         return;
     };
 
-    let Ok(player_pos) = player_query.single() else {
-        *turn = TurnState::Active(Turn::Player);
-        return;
+    let player_hex = match player_query.single() {
+        Ok((pos, _)) => pos.0,
+        Err(_) => {
+            *turn = TurnState::Active(Turn::Player);
+            return;
+        }
     };
-    let player_hex = player_pos.0;
 
     let Ok((entity, mut hex_pos, stats)) = enemy_query.get_mut(enemy_entity) else {
         return;
@@ -177,10 +215,8 @@ fn move_enemies(
     }
 
     if destination != current {
-        // Record this enemy's move in the turn order
         move_order.0.push(entity);
 
-        // Update grid state directly (can't use move_entity for enemy mid-queue)
         let old_pos = hex_pos.0;
         hex_pos.0 = destination;
 

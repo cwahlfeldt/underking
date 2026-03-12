@@ -1,3 +1,4 @@
+mod combat;
 mod components;
 mod debug_ui;
 mod entities;
@@ -44,6 +45,7 @@ fn main() {
             // FpsOverlayPlugin::default(),
         ))
         .add_plugins(render::RenderPlugin)
+        .add_plugins(combat::CombatPlugin)
         .add_plugins(entities::tile::TilePlugin)
         .add_plugins(entities::player::PlayerPlugin)
         .add_plugins(entities::enemy::EnemyPlugin)
