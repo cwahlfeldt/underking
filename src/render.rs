@@ -202,6 +202,11 @@ fn animate_rewind(
     mut query: Query<(Entity, &mut Transform, &mut RewindPath)>,
 ) {
     for (entity, mut transform, mut rewind) in &mut query {
+        // speed == 0 means "hold in place" — don't advance or remove
+        if rewind.speed == 0.0 {
+            continue;
+        }
+
         let distance = rewind.from.distance(rewind.to);
         if distance > 0.0 {
             rewind.progress += time.delta_secs() * rewind.speed / distance;
@@ -218,6 +223,16 @@ fn animate_rewind(
             let pos = rewind.from.lerp(rewind.to, t);
             transform.translation.x = pos.x;
             transform.translation.y = pos.y;
+        }
+
+        // Smoothly rotate to face movement direction
+        let dir = rewind.to - rewind.from;
+        if dir.length_squared() > 0.0 {
+            let target_angle = dir.y.atan2(dir.x);
+            let target_rot = Quat::from_rotation_z(target_angle);
+            transform.rotation = transform
+                .rotation
+                .slerp(target_rot, (TURN_SPEED * time.delta_secs()).min(1.0));
         }
     }
 }

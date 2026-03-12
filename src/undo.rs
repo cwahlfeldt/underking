@@ -14,6 +14,8 @@ impl Plugin for UndoPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(UndoHistory::default())
             .insert_resource(UndoAction::None)
+            .insert_resource(RewindQueue::default())
+            .insert_resource(TurnMoveOrder::default())
             .add_systems(Startup, spawn_undo_buttons)
             .add_systems(
                 Update,
@@ -22,6 +24,7 @@ impl Plugin for UndoPlugin {
                     handle_undo_button,
                     handle_redo_button,
                     apply_undo_action,
+                    process_rewind_queue,
                     update_button_colors,
                 )
                     .chain(),
@@ -37,18 +40,37 @@ pub enum UndoAction {
     Redo,
 }
 
+/// Tracks the order entities moved during the current turn sequence.
+/// Reset at the start of each player move. Used to build animation order for undo/redo.
+#[derive(Resource, Default)]
+pub struct TurnMoveOrder(pub Vec<Entity>);
+
 /// A snapshot of all game state needed to restore a turn.
 #[derive(Clone)]
 pub struct GameSnapshot {
     pub turn_state: TurnState,
     pub grid_cells: Vec<(Hex, TileData)>,
     pub positions: Vec<(Entity, Hex)>,
+    /// Order entities moved in this turn sequence (player first, then enemies).
+    pub move_order: Vec<Entity>,
 }
 
 #[derive(Resource, Default)]
 pub struct UndoHistory {
     pub undo_stack: Vec<GameSnapshot>,
     pub redo_stack: Vec<GameSnapshot>,
+}
+
+/// Queued rewind animations to play sequentially.
+/// Each entry is one entity animating at a time.
+#[derive(Resource, Default)]
+struct RewindQueue {
+    /// Each entry: (entity, from_pixel, to_pixel). Played one at a time.
+    steps: Vec<(Entity, Vec2, Vec2)>,
+    /// The entity currently animating.
+    active: Option<Entity>,
+    /// Entities with held RewindPath (speed=0) waiting for their turn or not needing animation.
+    held: Vec<Entity>,
 }
 
 // --- UI Components ---
@@ -216,7 +238,11 @@ fn handle_undo_redo_keys(keys: Res<ButtonInput<KeyCode>>, mut action: ResMut<Und
 
 // --- Core undo/redo logic ---
 
-pub fn capture_snapshot_from_grid(grid: &HexGrid<TileData>, turn: &TurnState) -> GameSnapshot {
+pub fn capture_snapshot(
+    grid: &HexGrid<TileData>,
+    turn: &TurnState,
+    move_order: &TurnMoveOrder,
+) -> GameSnapshot {
     let mut grid_cells = Vec::new();
     let mut positions = Vec::new();
 
@@ -231,6 +257,7 @@ pub fn capture_snapshot_from_grid(grid: &HexGrid<TileData>, turn: &TurnState) ->
         turn_state: *turn,
         grid_cells,
         positions,
+        move_order: move_order.0.clone(),
     }
 }
 
@@ -265,6 +292,8 @@ fn apply_undo_action(
     mut grid: ResMut<HexGrid<TileData>>,
     mut turn: ResMut<TurnState>,
     mut queue: ResMut<EnemyTurnQueue>,
+    mut rewind_queue: ResMut<RewindQueue>,
+    mut move_order: ResMut<TurnMoveOrder>,
     mut position_query: Query<&mut HexPosition>,
     mut transform_query: Query<&mut Transform>,
     animating: Query<Entity, With<MovePath>>,
@@ -281,14 +310,14 @@ fn apply_undo_action(
         let Some(snap) = history.undo_stack.pop() else {
             return;
         };
-        let current = capture_snapshot_from_grid(&grid, &turn);
+        let current = capture_snapshot(&grid, &turn, &move_order);
         history.redo_stack.push(current);
         snap
     } else {
         let Some(snap) = history.redo_stack.pop() else {
             return;
         };
-        let current = capture_snapshot_from_grid(&grid, &turn);
+        let current = capture_snapshot(&grid, &turn, &move_order);
         history.undo_stack.push(current);
         snap
     };
@@ -301,6 +330,12 @@ fn apply_undo_action(
         commands.entity(entity).remove::<RewindPath>();
     }
     queue.0.clear();
+    rewind_queue.steps.clear();
+    rewind_queue.active = None;
+    rewind_queue.held.clear();
+
+    // Restore the move order from the snapshot
+    move_order.0 = snapshot.move_order.clone();
 
     // Capture current visual positions BEFORE restoring snapshot
     let mut visual_positions: Vec<(Entity, Vec2)> = Vec::new();
@@ -314,43 +349,77 @@ fn apply_undo_action(
     // Restore grid, hex positions, and turn state from snapshot
     restore_snapshot(&snapshot, &mut grid, &mut turn, &mut position_query);
 
-    // Animate entities from their current visual position to their restored hex position.
-    // We set the Transform to the old visual position so there's no jump, then
-    // insert RewindPath to animate to the target. sync_hex_to_transform won't
-    // interfere because it filters out entities with RewindPath.
+    // Build per-entity animation entries
+    let mut anim_map: Vec<(Entity, Vec2, Vec2)> = Vec::new();
+
     for &(entity, target_hex) in &snapshot.positions {
         let (to_x, to_y) = target_hex.to_pixel(HEX_SIZE);
         let to = Vec2::new(to_x, to_y);
 
-        // Find this entity's old visual position
         let from = visual_positions
             .iter()
             .find(|(e, _)| *e == entity)
             .map(|(_, pos)| *pos)
             .unwrap_or(to);
 
-        if from.distance(to) < 1.0 {
-            // Already at target — just snap the transform
-            if let Ok(mut transform) = transform_query.get_mut(entity) {
-                transform.translation.x = to_x;
-                transform.translation.y = to_y;
-            }
-            continue;
-        }
-
-        // Set transform to the old visual position so there's no jump this frame
+        // Hold transform at current visual position
         if let Ok(mut transform) = transform_query.get_mut(entity) {
             transform.translation.x = from.x;
             transform.translation.y = from.y;
         }
 
-        // Insert RewindPath to animate from old position to restored position
+        // Insert holding RewindPath on ALL entities so sync_hex_to_transform skips them
         commands.entity(entity).insert(RewindPath {
             from,
-            to,
+            to: from,
             progress: 0.0,
-            speed: crate::render::MOVE_SPEED * 1.5,
+            speed: 0.0,
         });
+
+        if from.distance(to) < 1.0 {
+            rewind_queue.held.push(entity);
+        } else {
+            anim_map.push((entity, from, to));
+        }
+    }
+
+    // Build the animation sequence based on move_order.
+    // For undo: reverse order (last mover rewinds first).
+    // For redo: forward order (player first, then enemies in order).
+    let ordered_entities: Vec<Entity> = if is_undo {
+        // The snapshot we popped is the OLD state (before the moves happened).
+        // The move_order stored in the CURRENT snapshot (pushed to redo) tells us
+        // who moved. But we already pushed current to redo. Let's use the redo
+        // stack's top entry's move_order.
+        // Actually: the current snapshot (just pushed) has the move_order of the
+        // turn we're undoing. That's what we want.
+        let current_move_order = &history.redo_stack.last().unwrap().move_order;
+        current_move_order.iter().rev().copied().collect()
+    } else {
+        // Redoing: the snapshot we popped is from a previous undo. The move_order
+        // in the CURRENT snapshot (just pushed to undo) has the order of the state
+        // we're leaving. The snapshot we're restoring TO has the move_order of how
+        // it was originally played.
+        // Actually: the snapshot we're restoring has the move_order from when it was
+        // captured (at undo time). The undo stack's top (just pushed) has the
+        // current move_order. We want the ORIGINAL forward order, which is stored
+        // in the undo_stack top's move_order.
+        let current_move_order = &history.undo_stack.last().unwrap().move_order;
+        current_move_order.clone()
+    };
+
+    // Build steps in the determined order. Only include entities that actually need animation.
+    for entity in &ordered_entities {
+        if let Some(idx) = anim_map.iter().position(|(e, _, _)| e == entity) {
+            rewind_queue.steps.push(anim_map[idx]);
+        }
+    }
+
+    // Add any animated entities not in the move_order (shouldn't happen, but safety)
+    for &entry in &anim_map {
+        if !ordered_entities.contains(&entry.0) {
+            rewind_queue.steps.push(entry);
+        }
     }
 
     // Always return to player's turn after undo/redo so enemy AI doesn't re-trigger
@@ -362,6 +431,52 @@ fn apply_undo_action(
         history.undo_stack.len(),
         history.redo_stack.len()
     );
+}
+
+/// Processes the rewind queue one entity at a time.
+fn process_rewind_queue(
+    mut commands: Commands,
+    mut rewind_queue: ResMut<RewindQueue>,
+    mut rewind_query: Query<&mut RewindPath>,
+) {
+    // Nothing to do
+    if rewind_queue.steps.is_empty() && rewind_queue.active.is_none() {
+        // Clean up any remaining held entities
+        for entity in rewind_queue.held.drain(..) {
+            commands.entity(entity).remove::<RewindPath>();
+        }
+        return;
+    }
+
+    // Check if the active entity is still animating
+    if let Some(active) = rewind_queue.active {
+        let done = rewind_query
+            .get(active)
+            .map(|r| r.progress >= 1.0)
+            .unwrap_or(true);
+        if !done {
+            return;
+        }
+        rewind_queue.active = None;
+    }
+
+    if rewind_queue.steps.is_empty() {
+        // All steps done — clean up held entities
+        for entity in rewind_queue.held.drain(..) {
+            commands.entity(entity).remove::<RewindPath>();
+        }
+        return;
+    }
+
+    // Start the next step
+    let (entity, from, to) = rewind_queue.steps.remove(0);
+    if let Ok(mut rewind) = rewind_query.get_mut(entity) {
+        rewind.from = from;
+        rewind.to = to;
+        rewind.progress = 0.0;
+        rewind.speed = crate::render::MOVE_SPEED * 1.5;
+        rewind_queue.active = Some(entity);
+    }
 }
 
 #[cfg(test)]
@@ -391,7 +506,8 @@ mod tests {
         grid.get_mut(origin).unwrap().occupant = Some(e);
 
         let turn = TurnState::Active(crate::Turn::Player);
-        let snap = capture_snapshot_from_grid(&grid, &turn);
+        let move_order = TurnMoveOrder::default();
+        let snap = capture_snapshot(&grid, &turn, &move_order);
 
         assert_eq!(snap.positions.len(), 1);
         assert_eq!(snap.positions[0], (e, origin));
@@ -405,7 +521,8 @@ mod tests {
     fn push_undo_clears_redo() {
         let grid = make_grid();
         let turn = TurnState::Active(crate::Turn::Player);
-        let snap = capture_snapshot_from_grid(&grid, &turn);
+        let move_order = TurnMoveOrder::default();
+        let snap = capture_snapshot(&grid, &turn, &move_order);
 
         let mut history = UndoHistory::default();
         history.redo_stack.push(snap.clone());
@@ -421,9 +538,10 @@ mod tests {
         let grid = make_grid();
         let turn_p = TurnState::Active(crate::Turn::Player);
         let turn_e = TurnState::Active(crate::Turn::Enemy);
+        let move_order = TurnMoveOrder::default();
 
-        let snap1 = capture_snapshot_from_grid(&grid, &turn_p);
-        let snap2 = capture_snapshot_from_grid(&grid, &turn_e);
+        let snap1 = capture_snapshot(&grid, &turn_p, &move_order);
+        let snap2 = capture_snapshot(&grid, &turn_e, &move_order);
 
         let mut history = UndoHistory::default();
         push_undo(&mut history, snap1);

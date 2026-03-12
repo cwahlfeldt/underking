@@ -100,6 +100,7 @@ fn move_enemies(
     mut grid: ResMut<HexGrid<TileData>>,
     mut turn: ResMut<TurnState>,
     mut queue: ResMut<EnemyTurnQueue>,
+    mut move_order: ResMut<crate::undo::TurnMoveOrder>,
     animating: Query<(), With<MovePath>>,
     player_query: Query<&HexPosition, With<Player>>,
     mut enemy_query: Query<(Entity, &mut HexPosition, &Stats), (With<Enemy>, Without<Player>)>,
@@ -176,6 +177,9 @@ fn move_enemies(
     }
 
     if destination != current {
+        // Record this enemy's move in the turn order
+        move_order.0.push(entity);
+
         // Update grid state directly (can't use move_entity for enemy mid-queue)
         let old_pos = hex_pos.0;
         hex_pos.0 = destination;

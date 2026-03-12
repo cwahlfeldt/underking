@@ -74,6 +74,7 @@ fn handle_player_move(
     mut turn: ResMut<TurnState>,
     mut game_settings: ResMut<GameSettings>,
     mut history: ResMut<crate::undo::UndoHistory>,
+    mut move_order: ResMut<crate::undo::TurnMoveOrder>,
     mut query: Query<(Entity, &mut HexPosition, &Stats), With<Player>>,
 ) {
     if *turn != TurnState::Active(Turn::Player) {
@@ -107,9 +108,13 @@ fn handle_player_move(
     let path = grid.astar(hex_pos.0, target, |h| is_passable(&grid, h));
 
     if let Some(path) = path {
-        // Snapshot before move (derive positions from grid occupants)
-        let snapshot = crate::undo::capture_snapshot_from_grid(&grid, &turn);
+        // Snapshot before move
+        let snapshot = crate::undo::capture_snapshot(&grid, &turn, &move_order);
         crate::undo::push_undo(&mut history, snapshot);
+
+        // Start tracking move order for this turn sequence
+        move_order.0.clear();
+        move_order.0.push(entity);
 
         game_settings.selected_hex = None;
         move_entity(
