@@ -1,10 +1,12 @@
+use std::collections::HashSet;
+
 use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
 use crate::{
-    GameSettings,
+    GameSettings, Turn, TurnState,
     components::HexPosition,
-    entities::enemy::Enemy,
+    entities::{enemy::Enemy, player::Player},
     grid::TileData,
     hex::{HEX_SIZE, Hex, HexGrid},
 };
@@ -14,6 +16,10 @@ const TILE_COLOR: Color = Color::srgb(0.2, 0.2, 0.2);
 const WALL_COLOR: Color = Color::srgba(0.2, 0.2, 0.2, 0.2);
 const HIGHLIGHT_COLOR: Color = Color::srgba(0.2, 0.2, 0.8, 0.8);
 const ATTACK_RANGE_COLOR: Color = Color::srgb(0.6, 0.15, 0.15);
+/// Tiles the player can move to (no adjacent enemy).
+const PLAYER_MOVE_COLOR: Color = Color::srgba(0.15, 0.35, 0.6, 0.55);
+/// Tiles the player can move to that will trigger an attack on an adjacent enemy.
+const PLAYER_ATTACK_COLOR: Color = Color::srgba(0.8, 0.4, 0.1, 0.75);
 pub const GRID_RADIUS: i32 = 4;
 const UNTRAVERSABLE_COUNT: usize = 10;
 
@@ -21,8 +27,10 @@ pub struct TilePlugin;
 
 impl Plugin for TilePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_tiles)
-            .add_systems(Update, (render_tiles, show_enemy_attack_range));
+        app.add_systems(Startup, spawn_tiles).add_systems(
+            Update,
+            (render_tiles, show_player_ranges, show_enemy_attack_range).chain(),
+        );
     }
 }
 
@@ -155,6 +163,98 @@ fn on_tile_out(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Highlights the player's reachable tiles during their turn.
+/// - Orange: moving here will attack an adjacent enemy.
+/// - Blue: normal move tile.
+/// Also updates `RestMaterial` so hover-out restores the range color, not the
+/// base tile color.
+fn show_player_ranges(
+    turn: Res<TurnState>,
+    grid: Res<HexGrid<TileData>>,
+    player_query: Query<(Entity, &HexPosition), With<Player>>,
+    enemy_query: Query<Entity, With<Enemy>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut tile_query: Query<
+        (
+            &HexPosition,
+            &mut MeshMaterial2d<ColorMaterial>,
+            &mut RestMaterial,
+        ),
+        With<Tile>,
+    >,
+    mut move_matl: Local<Option<Handle<ColorMaterial>>>,
+    mut attack_matl: Local<Option<Handle<ColorMaterial>>>,
+    mut tile_matl: Local<Option<Handle<ColorMaterial>>>,
+) {
+    if !turn.is_changed() && !grid.is_changed() {
+        return;
+    }
+
+    if move_matl.is_none() {
+        *move_matl = Some(materials.add(ColorMaterial::from_color(PLAYER_MOVE_COLOR)));
+    }
+    if attack_matl.is_none() {
+        *attack_matl = Some(materials.add(ColorMaterial::from_color(PLAYER_ATTACK_COLOR)));
+    }
+    if tile_matl.is_none() {
+        *tile_matl = Some(materials.add(ColorMaterial::from_color(TILE_COLOR)));
+    }
+    let move_h = move_matl.as_ref().unwrap().clone();
+    let attack_h = attack_matl.as_ref().unwrap().clone();
+    let tile_h = tile_matl.as_ref().unwrap().clone();
+
+    let (attack_tiles, move_tiles): (HashSet<Hex>, HashSet<Hex>) =
+        if *turn == TurnState::Active(Turn::Player) {
+            let Ok((player_entity, _)) = player_query.single() else {
+                return;
+            };
+            let mut at = HashSet::new();
+            let mut mt = HashSet::new();
+            for pos in grid.positions() {
+                let Some(tile) = grid.get(pos) else {
+                    continue;
+                };
+                if !tile.traversable || tile.occupant.is_some() {
+                    continue;
+                }
+                if !tile.move_ranges.contains(&player_entity) {
+                    continue;
+                }
+                let adj_enemy = grid.neighbors(pos).into_iter().any(|n| {
+                    grid.get(n)
+                        .and_then(|t| t.occupant)
+                        .map(|occ| enemy_query.contains(occ))
+                        .unwrap_or(false)
+                });
+                if adj_enemy {
+                    at.insert(pos);
+                } else {
+                    mt.insert(pos);
+                }
+            }
+            (at, mt)
+        } else {
+            (HashSet::new(), HashSet::new())
+        };
+
+    for (hex_pos, mut mat, mut rest) in &mut tile_query {
+        let hex = hex_pos.0;
+        if !grid.get(hex).map(|t| t.traversable).unwrap_or(true) {
+            continue;
+        }
+        if attack_tiles.contains(&hex) {
+            rest.0 = attack_h.clone();
+            mat.0 = attack_h.clone();
+        } else if move_tiles.contains(&hex) {
+            rest.0 = move_h.clone();
+            mat.0 = move_h.clone();
+        } else {
+            rest.0 = tile_h.clone();
+            mat.0 = tile_h.clone();
         }
     }
 }
