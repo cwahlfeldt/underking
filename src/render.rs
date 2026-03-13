@@ -69,10 +69,7 @@ mod tests {
         for (name, f) in fns {
             let at_0 = f(0.0);
             let at_1 = f(1.0);
-            assert!(
-                at_0.abs() < 1e-6,
-                "{name}: f(0) = {at_0}, expected 0"
-            );
+            assert!(at_0.abs() < 1e-6, "{name}: f(0) = {at_0}, expected 0");
             assert!(
                 (at_1 - 1.0).abs() < 1e-6,
                 "{name}: f(1) = {at_1}, expected 1"
@@ -219,7 +216,7 @@ fn animate_rewind(
             transform.translation.y = rewind.to.y;
             commands.entity(entity).remove::<RewindPath>();
         } else {
-            let t = EASE_FN(rewind.progress);
+            let t = ease_in_cubic(rewind.progress);
             let pos = rewind.from.lerp(rewind.to, t);
             transform.translation.x = pos.x;
             transform.translation.y = pos.y;
@@ -236,4 +233,3 @@ fn animate_rewind(
         }
     }
 }
-
