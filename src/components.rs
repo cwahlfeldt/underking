@@ -2,6 +2,10 @@ use bevy::prelude::*;
 
 use crate::hex::Hex;
 
+/// Marker for all game entities that should be despawned on reset.
+#[derive(Component)]
+pub struct GameEntity;
+
 #[derive(Component)]
 pub struct Health {
     pub current: f32,
@@ -40,6 +44,11 @@ pub struct SkipTurn;
 #[derive(Component)]
 pub struct Dead;
 
+/// Z-offset added on top of isometric depth sorting.
+/// Entities get 1.0 to render above tiles.
+#[derive(Component)]
+pub struct ZOffset(pub f32);
+
 /// Like MovePath but for undo/redo visual transitions.
 /// Doesn't interact with turn logic (check_animation_done ignores it).
 #[derive(Component)]
@@ -48,4 +57,31 @@ pub struct RewindPath {
     pub to: Vec2,
     pub progress: f32,
     pub speed: f32,
+}
+
+/// Drives a melee attack animation: lunge toward target, then return.
+#[derive(Component)]
+pub struct AttackAnimation {
+    /// Pixel position of the attacker's home hex.
+    pub home: Vec2,
+    /// Pixel position of the target enemy's hex (lunge destination).
+    pub target: Vec2,
+    /// Entity being attacked (to kill when animation finishes).
+    pub target_entity: Entity,
+    /// Hex of the target (to clear from grid).
+    pub target_hex: crate::hex::Hex,
+    /// 0.0..1.0 progress through the current phase.
+    pub progress: f32,
+    /// Speed in pixels/sec.
+    pub speed: f32,
+    /// Current phase of the attack.
+    pub phase: AttackPhase,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AttackPhase {
+    /// Lunging toward the enemy.
+    LungeForward,
+    /// Returning to home position.
+    LungeBack,
 }

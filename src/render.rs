@@ -1,16 +1,17 @@
 use bevy::prelude::*;
 
-use crate::components::{HexPosition, MovePath, RewindPath};
-use crate::hex::HEX_SIZE;
+use crate::components::{HexPosition, MovePath, RewindPath, ZOffset};
+use crate::entities::player::FacingDirection;
+use crate::hex::{HEX_SIZE, iso_z, iso_z_from_y};
 
 /// Pixels per second for movement along the path.
-pub const MOVE_SPEED: f32 = 220.0;
+pub const MOVE_SPEED: f32 = 150.0;
 /// Rotation slerp rate — higher = snappier turns.
 pub const TURN_SPEED: f32 = 27.0;
 /// Easing curve applied to movement progress (0..1 → 0..1).
 /// Swap to any of: ease_linear, ease_in_quad, ease_out_quad, ease_in_out_quad,
 /// ease_in_cubic, ease_out_cubic, ease_in_out_cubic
-pub const EASE_FN: fn(f32) -> f32 = ease_out_cubic;
+pub const EASE_FN: fn(f32) -> f32 = ease_linear;
 
 // --- Easing functions (swap EASE_FN above to use a different one) ---
 #[allow(dead_code)]
@@ -126,7 +127,7 @@ impl Plugin for RenderPlugin {
 
 fn sync_hex_to_transform(
     mut query: Query<
-        (&HexPosition, &mut Transform),
+        (&HexPosition, &mut Transform, Option<&ZOffset>),
         (
             Or<(Changed<HexPosition>, Added<Transform>)>,
             Without<MovePath>,
@@ -134,19 +135,27 @@ fn sync_hex_to_transform(
         ),
     >,
 ) {
-    for (hex_pos, mut transform) in &mut query {
-        let (x, y) = hex_pos.0.to_pixel(HEX_SIZE);
+    for (hex_pos, mut transform, z_offset) in &mut query {
+        let (x, y) = hex_pos.0.to_iso_pixel(HEX_SIZE);
         transform.translation.x = x;
         transform.translation.y = y;
+        transform.translation.z = iso_z(&hex_pos.0) + z_offset.map(|z| z.0).unwrap_or(0.0);
     }
 }
 
 fn animate_movement(
     mut commands: Commands,
     time: Res<Time>,
-    mut query: Query<(Entity, &mut Transform, &mut MovePath)>,
+    mut query: Query<(
+        Entity,
+        &mut Transform,
+        &mut MovePath,
+        Option<&FacingDirection>,
+        Option<&ZOffset>,
+    )>,
 ) {
-    for (entity, mut transform, mut path) in &mut query {
+    for (entity, mut transform, mut path, has_facing, z_offset) in &mut query {
+        let z_off = z_offset.map(|z| z.0).unwrap_or(0.0);
         let from = path.waypoints[path.current_index];
         let to = path.waypoints[path.current_index + 1];
 
@@ -165,6 +174,7 @@ fn animate_movement(
             let arrived = path.waypoints[path.current_index];
             transform.translation.x = arrived.x;
             transform.translation.y = arrived.y;
+            transform.translation.z = iso_z_from_y(arrived.y) + z_off;
 
             // If this was the last segment, remove the component
             if path.current_index + 1 >= path.waypoints.len() {
@@ -176,19 +186,22 @@ fn animate_movement(
             let pos = from.lerp(to, t);
             transform.translation.x = pos.x;
             transform.translation.y = pos.y;
+            transform.translation.z = iso_z_from_y(pos.y) + z_off;
         }
 
-        // Smoothly rotate to face movement direction
-        let from = path.waypoints[path.current_index];
-        let next = path.waypoints[(path.current_index + 1).min(path.waypoints.len() - 1)];
-        let dir = next - from;
-        if dir.length_squared() > 0.0 {
-            let target_angle = dir.y.atan2(dir.x);
-            let target_rot = Quat::from_rotation_z(target_angle);
-            let turn_speed = TURN_SPEED;
-            transform.rotation = transform
-                .rotation
-                .slerp(target_rot, (turn_speed * time.delta_secs()).min(1.0));
+        // Smoothly rotate to face movement direction (skip for sprite-based entities)
+        if has_facing.is_none() {
+            let from = path.waypoints[path.current_index];
+            let next = path.waypoints[(path.current_index + 1).min(path.waypoints.len() - 1)];
+            let dir = next - from;
+            if dir.length_squared() > 0.0 {
+                let target_angle = dir.y.atan2(dir.x);
+                let target_rot = Quat::from_rotation_z(target_angle);
+                let turn_speed = TURN_SPEED;
+                transform.rotation = transform
+                    .rotation
+                    .slerp(target_rot, (turn_speed * time.delta_secs()).min(1.0));
+            }
         }
     }
 }
@@ -196,9 +209,16 @@ fn animate_movement(
 fn animate_rewind(
     mut commands: Commands,
     time: Res<Time>,
-    mut query: Query<(Entity, &mut Transform, &mut RewindPath)>,
+    mut query: Query<(
+        Entity,
+        &mut Transform,
+        &mut RewindPath,
+        Option<&ZOffset>,
+        Option<&FacingDirection>,
+    )>,
 ) {
-    for (entity, mut transform, mut rewind) in &mut query {
+    for (entity, mut transform, mut rewind, z_offset, has_facing) in &mut query {
+        let z_off = z_offset.map(|z| z.0).unwrap_or(0.0);
         // speed == 0 means "hold in place" — don't advance or remove
         if rewind.speed == 0.0 {
             continue;
@@ -214,22 +234,26 @@ fn animate_rewind(
         if rewind.progress >= 1.0 {
             transform.translation.x = rewind.to.x;
             transform.translation.y = rewind.to.y;
+            transform.translation.z = iso_z_from_y(rewind.to.y) + z_off;
             commands.entity(entity).remove::<RewindPath>();
         } else {
             let t = ease_in_cubic(rewind.progress);
             let pos = rewind.from.lerp(rewind.to, t);
             transform.translation.x = pos.x;
             transform.translation.y = pos.y;
+            transform.translation.z = iso_z_from_y(pos.y) + z_off;
         }
 
-        // Smoothly rotate to face movement direction
-        let dir = rewind.to - rewind.from;
-        if dir.length_squared() > 0.0 {
-            let target_angle = dir.y.atan2(dir.x);
-            let target_rot = Quat::from_rotation_z(target_angle);
-            transform.rotation = transform
-                .rotation
-                .slerp(target_rot, (TURN_SPEED * time.delta_secs()).min(1.0));
+        // Smoothly rotate to face movement direction (skip for sprite-based entities)
+        if has_facing.is_none() {
+            let dir = rewind.to - rewind.from;
+            if dir.length_squared() > 0.0 {
+                let target_angle = dir.y.atan2(dir.x);
+                let target_rot = Quat::from_rotation_z(target_angle);
+                transform.rotation = transform
+                    .rotation
+                    .slerp(target_rot, (TURN_SPEED * time.delta_secs()).min(1.0));
+            }
         }
     }
 }

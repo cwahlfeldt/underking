@@ -111,7 +111,7 @@ pub fn move_entity(
     let waypoints: Vec<Vec2> = path
         .iter()
         .map(|h| {
-            let (x, y) = h.to_pixel(HEX_SIZE);
+            let (x, y) = h.to_iso_pixel(HEX_SIZE);
             Vec2::new(x, y)
         })
         .collect();

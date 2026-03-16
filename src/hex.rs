@@ -3,7 +3,22 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use std::ops::{Add, Neg, Sub};
 
-pub const HEX_SIZE: f32 = 40.0;
+pub const HEX_SIZE: f32 = 60.0;
+
+/// Vertical scale factor for isometric projection. 0.5 ≈ 30-degree viewing angle.
+pub const ISO_Y_SCALE: f32 = 0.6;
+
+/// Compute a z-value for depth sorting from a pixel-space Y coordinate.
+/// Lower pixel-y (further from camera) → higher z so nearer rows draw on top.
+pub fn iso_z_from_y(pixel_y: f32) -> f32 {
+    -pixel_y * 0.01
+}
+
+/// Compute a z-value for depth sorting in isometric view from hex coords.
+pub fn iso_z(hex: &Hex) -> f32 {
+    let (_x, y) = hex.to_iso_pixel(HEX_SIZE);
+    iso_z_from_y(y)
+}
 
 /// Cube coordinate on a hex grid.
 ///
@@ -109,6 +124,38 @@ impl Hex {
             let angle_deg = 60.0 * i as f32;
             let angle_rad = angle_deg.to_radians();
             corners[i] = (cx + size * angle_rad.cos(), cy + size * angle_rad.sin());
+        }
+        corners
+    }
+
+    /// Convert to isometric world-space center point (flat-topped, y squashed).
+    pub fn to_iso_pixel(self, size: f32) -> (f32, f32) {
+        let q = self.q as f32;
+        let r = self.r as f32;
+        let x = size * (3.0 / 2.0 * q);
+        let y = size * (SQRT_3 / 2.0 * q + SQRT_3 * r) * ISO_Y_SCALE;
+        (x, y)
+    }
+
+    /// Convert an isometric world-space point back to the nearest hex.
+    pub fn from_iso_pixel(x: f32, y: f32, size: f32) -> Hex {
+        let y_unscaled = y / ISO_Y_SCALE;
+        let q = (2.0 / 3.0 * x) / size;
+        let r = (-1.0 / 3.0 * x + SQRT_3 / 3.0 * y_unscaled) / size;
+        cube_round(q, r)
+    }
+
+    /// The six corner vertices in isometric world-space (flat-topped, y squashed).
+    pub fn iso_corners(self, size: f32) -> [(f32, f32); 6] {
+        let (cx, cy) = self.to_iso_pixel(size);
+        let mut corners = [(0.0, 0.0); 6];
+        for i in 0..6 {
+            let angle_deg = 60.0 * i as f32;
+            let angle_rad = angle_deg.to_radians();
+            corners[i] = (
+                cx + size * angle_rad.cos(),
+                cy + size * angle_rad.sin() * ISO_Y_SCALE,
+            );
         }
         corners
     }
@@ -451,6 +498,16 @@ mod tests {
             let (px, py) = hex.to_pixel(size);
             let recovered = Hex::from_pixel(px, py, size);
             assert_eq!(hex, recovered, "roundtrip failed for {hex:?}");
+        }
+    }
+
+    #[test]
+    fn iso_pixel_roundtrip() {
+        let size = 16.0;
+        for hex in Hex::ORIGIN.spiral(3) {
+            let (px, py) = hex.to_iso_pixel(size);
+            let recovered = Hex::from_iso_pixel(px, py, size);
+            assert_eq!(hex, recovered, "iso roundtrip failed for {hex:?}");
         }
     }
 

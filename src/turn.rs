@@ -13,6 +13,8 @@ pub enum Turn {
 pub enum CombatPhase {
     /// After player moves: player attacks enemies in range, then enemies attack player if in range.
     AfterPlayerMove,
+    /// Waiting for player attack animation to finish before applying kills.
+    PlayerAttackAnimating,
     /// After all enemies move: (reserved for future use).
     AfterEnemyMove,
 }
@@ -41,3 +43,7 @@ pub struct GameSettings {
     /// Player's hex before the current move, used by combat resolution.
     pub player_prev_hex: Option<Hex>,
 }
+
+/// Enemies queued to be killed after the player's attack animation finishes.
+#[derive(Resource, Default)]
+pub struct PendingKills(pub Vec<(Entity, Hex)>);

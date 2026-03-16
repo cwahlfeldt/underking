@@ -382,7 +382,7 @@ fn apply_undo_action(
     let mut anim_map: Vec<(Entity, Vec2, Vec2)> = Vec::new();
 
     for &(entity, target_hex) in &snapshot.positions {
-        let (to_x, to_y) = target_hex.to_pixel(HEX_SIZE);
+        let (to_x, to_y) = target_hex.to_iso_pixel(HEX_SIZE);
         let to = Vec2::new(to_x, to_y);
 
         let from = visual_positions

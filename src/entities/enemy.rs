@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
 use crate::{
-    components::{Dead, HexPosition, Health, MovePath, SkipTurn, Stats},
+    components::{Dead, GameEntity, HexPosition, Health, MovePath, SkipTurn, Stats, ZOffset},
     entities::player::Player,
     grid::{TileData, clear_ranges, is_passable, update_ranges},
     hex::{HEX_SIZE, Hex, HexGrid},
@@ -63,6 +63,7 @@ pub fn spawn_enemies(
         let entity = commands
             .spawn((
                 Enemy,
+                GameEntity,
                 Health {
                     current: 1.0,
                     max: 1.0,
@@ -91,6 +92,7 @@ fn render_enemy(mut commands: Commands, query: Query<Entity, Added<Enemy>>) {
             Transform::default(),
             Text2d::new("@"),
             TextColor(Color::srgb(0.776, 0.259, 0.922)),
+            ZOffset(1.0),
         ));
     }
 }
@@ -210,7 +212,7 @@ fn move_enemies(
         let waypoints: Vec<Vec2> = move_path
             .iter()
             .map(|h| {
-                let (x, y) = h.to_pixel(HEX_SIZE);
+                let (x, y) = h.to_iso_pixel(HEX_SIZE);
                 Vec2::new(x, y)
             })
             .collect();

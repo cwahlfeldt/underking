@@ -4,7 +4,7 @@ use crate::{
     components::{HexPosition, Stats},
     entities::{enemy::Enemy, player::Player},
     grid::TileData,
-    hex::{HEX_SIZE, HexGrid},
+    hex::{HEX_SIZE, HexGrid, ISO_Y_SCALE, iso_z},
     turn::{CombatPhase, Turn, TurnPhase, TurnState},
     undo::UndoHistory,
 };
@@ -73,14 +73,14 @@ fn spawn_coord_labels(mut commands: Commands, grid: Res<HexGrid<TileData>>) {
     let inset = (HEX_SIZE - GAP) * COORD_INSET_FACTOR;
 
     for pos in grid.positions() {
-        let (cx, cy) = pos.to_pixel(HEX_SIZE);
+        let (cx, cy) = pos.to_iso_pixel(HEX_SIZE);
         let h = pos;
 
-        // q at top, r at bottom-left, s at bottom-right
+        // q at top, r at bottom-left, s at bottom-right (y-offsets scaled for iso)
         let labels: [(f32, f32, String); 3] = [
-            (0.0, inset, format!("{}", h.q)),
-            (-inset * 0.87, -inset * 0.5, format!("{}", h.r)),
-            (inset * 0.87, -inset * 0.5, format!("{}", h.s)),
+            (0.0, inset * ISO_Y_SCALE, format!("{}", h.q)),
+            (-inset * 0.87, -inset * 0.5 * ISO_Y_SCALE, format!("{}", h.r)),
+            (inset * 0.87, -inset * 0.5 * ISO_Y_SCALE, format!("{}", h.s)),
         ];
 
         for (lx, ly, text) in labels {
@@ -92,7 +92,7 @@ fn spawn_coord_labels(mut commands: Commands, grid: Res<HexGrid<TileData>>) {
                     ..default()
                 },
                 TextColor(COORD_LABEL_COLOR),
-                Transform::from_xyz(cx + lx, cy + ly, 2.0),
+                Transform::from_xyz(cx + lx, cy + ly, iso_z(&pos) + 2.0),
                 Visibility::Hidden,
             ));
         }
@@ -162,8 +162,10 @@ fn update_debug_panel(
             TurnPhase::Turn(Turn::Enemy) => "ANIMATING -> Enemy",
             TurnPhase::Combat(CombatPhase::AfterPlayerMove) => "ANIMATING -> Combat (Player)",
             TurnPhase::Combat(CombatPhase::AfterEnemyMove) => "ANIMATING -> Combat (Enemy)",
+            TurnPhase::Combat(CombatPhase::PlayerAttackAnimating) => "ANIMATING -> Attack Anim",
         },
         TurnState::Combat(CombatPhase::AfterPlayerMove) => "COMBAT (After Player)",
+        TurnState::Combat(CombatPhase::PlayerAttackAnimating) => "ATTACK ANIMATING",
         TurnState::Combat(CombatPhase::AfterEnemyMove) => "COMBAT (After Enemy)",
     };
     lines.push(format!("--- {turn_label} ---\n"));

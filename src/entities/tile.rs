@@ -1,11 +1,14 @@
 use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
+
 use crate::{
-    components::HexPosition,
+    components::{GameEntity, HexPosition},
     entities::enemy::Enemy,
     grid::TileData,
-    hex::{HEX_SIZE, Hex, HexGrid},
+    hex::{HEX_SIZE, ISO_Y_SCALE, Hex, HexGrid},
     turn::GameSettings,
 };
 
@@ -49,7 +52,7 @@ pub fn spawn_tiles(mut commands: Commands) {
 
     for pos in &positions {
         let traversable = !walls.contains(pos);
-        let entity = commands.spawn((Tile, HexPosition(*pos))).id();
+        let entity = commands.spawn((Tile, GameEntity, HexPosition(*pos))).id();
 
         grid.insert(
             *pos,
@@ -71,7 +74,7 @@ fn render_tiles(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let hex_mesh = meshes.add(RegularPolygon::new(HEX_SIZE - GAP, 6));
+    let hex_mesh = meshes.add(create_iso_hex_mesh(HEX_SIZE - GAP));
     let hover_matl = materials.add(ColorMaterial::from_color(HIGHLIGHT_COLOR));
 
     for (entity, hex_pos) in &query {
@@ -94,7 +97,7 @@ fn render_tiles(
             Mesh2d(hex_mesh.clone()),
             MeshMaterial2d(matl.clone()),
             RestMaterial(matl),
-            Transform::default().with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_6)),
+            Transform::default(),
         ));
 
         if traversable || occupant {
@@ -215,4 +218,34 @@ fn update_material_on<E: EntityEvent>(
             material.0 = new_material.clone();
         }
     }
+}
+
+/// Build a flat-topped hex mesh with isometric y-squash baked into vertices.
+fn create_iso_hex_mesh(size: f32) -> Mesh {
+    let mut positions = Vec::with_capacity(7);
+    positions.push([0.0_f32, 0.0, 0.0]); // center
+
+    for i in 0..6 {
+        let angle_rad = (60.0 * i as f32).to_radians();
+        let x = size * angle_rad.cos();
+        let y = size * angle_rad.sin() * ISO_Y_SCALE;
+        positions.push([x, y, 0.0]);
+    }
+
+    // Fan triangles from center vertex
+    let indices: Vec<u32> = (0..6u32)
+        .flat_map(|i| [0, i + 1, if i + 2 > 6 { 1 } else { i + 2 }])
+        .collect();
+
+    let normals: Vec<[f32; 3]> = (0..7).map(|_| [0.0, 0.0, 1.0]).collect();
+    let uvs: Vec<[f32; 2]> = positions
+        .iter()
+        .map(|v| [(v[0] / size + 1.0) * 0.5, (v[1] / size + 1.0) * 0.5])
+        .collect();
+
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices))
 }
