@@ -2,9 +2,11 @@ use bevy::prelude::*;
 use rand::seq::SliceRandom;
 
 use crate::{
-    components::{AttackAnimation, AttackPhase, GameEntity, Health, HexPosition, MovePath, Stats, ZOffset},
+    components::{
+        AttackAnimation, AttackPhase, GameEntity, Health, HexPosition, MovePath, Stats, ZOffset,
+    },
     grid::{TileData, is_passable, move_entity, update_ranges},
-    hex::{Hex, HexGrid, HEX_SIZE, iso_z_from_y},
+    hex::{HEX_SIZE, Hex, HexGrid, iso_z_from_y},
     render::MOVE_SPEED,
     turn::{CombatPhase, GameSettings, Turn, TurnPhase, TurnState},
 };
@@ -271,14 +273,17 @@ fn update_facing_from_movement(
 pub fn animate_attack(
     mut commands: Commands,
     time: Res<Time>,
-    mut query: Query<(
-        Entity,
-        &mut Transform,
-        &mut AttackAnimation,
-        &mut FacingDirection,
-        &mut Sprite,
-        Option<&ZOffset>,
-    ), With<Player>>,
+    mut query: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut AttackAnimation,
+            &mut FacingDirection,
+            &mut Sprite,
+            Option<&ZOffset>,
+        ),
+        With<Player>,
+    >,
 ) {
     for (entity, mut transform, mut attack, mut facing, mut sprite, z_offset) in &mut query {
         let z_off = z_offset.map(|z| z.0).unwrap_or(0.0);

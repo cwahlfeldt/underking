@@ -5,7 +5,7 @@ use crate::entities::player::FacingDirection;
 use crate::hex::{HEX_SIZE, iso_z, iso_z_from_y};
 
 /// Pixels per second for movement along the path.
-pub const MOVE_SPEED: f32 = 150.0;
+pub const MOVE_SPEED: f32 = 190.0;
 /// Rotation slerp rate — higher = snappier turns.
 pub const TURN_SPEED: f32 = 27.0;
 /// Easing curve applied to movement progress (0..1 → 0..1).
