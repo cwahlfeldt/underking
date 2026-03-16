@@ -5,7 +5,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 
 use crate::{
-    components::{GameEntity, HexPosition},
+    components::{Bomb, GameEntity, HexPosition},
     entities::enemy::Enemy,
     grid::TileData,
     hex::{HEX_SIZE, ISO_Y_SCALE, Hex, HexGrid},
@@ -13,8 +13,11 @@ use crate::{
 };
 
 const GAP: f32 = 1.5;
-const TILE_COLOR: Color = Color::srgb(0.2, 0.2, 0.2);
+const EXTRUDE_HEIGHT: f32 = 18.0;
+const TILE_COLOR: Color = Color::srgb(0.25, 0.25, 0.25);
+const TILE_SIDE_COLOR: Color = Color::srgb(0.13, 0.13, 0.13);
 const WALL_COLOR: Color = Color::srgba(0.2, 0.2, 0.2, 0.2);
+const WALL_SIDE_COLOR: Color = Color::srgba(0.1, 0.1, 0.1, 0.2);
 const HIGHLIGHT_COLOR: Color = Color::srgba(0.2, 0.2, 0.8, 0.8);
 const ATTACK_RANGE_COLOR: Color = Color::srgb(0.6, 0.15, 0.15);
 pub const GRID_RADIUS: i32 = 4;
@@ -75,6 +78,7 @@ fn render_tiles(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     let hex_mesh = meshes.add(create_iso_hex_mesh(HEX_SIZE - GAP));
+    let side_mesh = meshes.add(create_hex_side_mesh(HEX_SIZE - GAP, EXTRUDE_HEIGHT));
     let hover_matl = materials.add(ColorMaterial::from_color(HIGHLIGHT_COLOR));
 
     for (entity, hex_pos) in &query {
@@ -84,12 +88,14 @@ fn render_tiles(
             .map(|t| t.occupant.is_some())
             .unwrap_or(false);
 
-        // Each tile gets its own material so we can tint individually
-        let matl = if traversable {
-            materials.add(ColorMaterial::from_color(TILE_COLOR))
+        let (top_color, side_color) = if traversable {
+            (TILE_COLOR, TILE_SIDE_COLOR)
         } else {
-            materials.add(ColorMaterial::from_color(WALL_COLOR))
+            (WALL_COLOR, WALL_SIDE_COLOR)
         };
+
+        let matl = materials.add(ColorMaterial::from_color(top_color));
+        let side_matl = materials.add(ColorMaterial::from_color(side_color));
         let rest_matl = matl.clone();
 
         let mut ec = commands.entity(entity);
@@ -98,6 +104,15 @@ fn render_tiles(
             MeshMaterial2d(matl.clone()),
             RestMaterial(matl),
             Transform::default(),
+        ));
+
+        // Spawn the extruded side as a child so it moves with the tile.
+        // z = -0.1 so it renders behind the top face.
+        ec.with_child((
+            Mesh2d(side_mesh.clone()),
+            MeshMaterial2d(side_matl),
+            Transform::from_xyz(0.0, 0.0, -0.1),
+            Pickable::IGNORE,
         ));
 
         if traversable || occupant {
@@ -129,14 +144,22 @@ fn on_tile_over(
     query: Query<&HexPosition>,
     grid: Res<HexGrid<TileData>>,
     enemy_query: Query<(), With<Enemy>>,
+    bomb_query: Query<(Entity, &HexPosition), With<Bomb>>,
     mut settings: ResMut<GameSettings>,
 ) {
     if let Ok(pos) = query.get(ev.event_target()) {
+        // Check for enemy occupant
         if let Some(tile) = grid.get(pos.0) {
             if let Some(occupant) = tile.occupant {
                 if enemy_query.get(occupant).is_ok() {
                     settings.hovered_enemy = Some(occupant);
                 }
+            }
+        }
+        // Check for bomb on this hex
+        for (bomb_entity, bomb_pos) in &bomb_query {
+            if bomb_pos.0 == pos.0 {
+                settings.hovered_bomb = Some(bomb_entity);
             }
         }
     }
@@ -147,6 +170,7 @@ fn on_tile_out(
     query: Query<&HexPosition>,
     grid: Res<HexGrid<TileData>>,
     enemy_query: Query<(), With<Enemy>>,
+    bomb_query: Query<(Entity, &HexPosition), With<Bomb>>,
     mut settings: ResMut<GameSettings>,
 ) {
     if let Ok(pos) = query.get(ev.event_target()) {
@@ -159,13 +183,23 @@ fn on_tile_out(
                 }
             }
         }
+        for (bomb_entity, bomb_pos) in &bomb_query {
+            if bomb_pos.0 == pos.0 {
+                if settings.hovered_bomb == Some(bomb_entity) {
+                    settings.hovered_bomb = None;
+                }
+            }
+        }
     }
 }
 
-/// Highlights tiles in an enemy's attack range when hovered.
+const BOMB_RANGE_COLOR: Color = Color::srgb(0.9, 0.4, 0.0);
+
+/// Highlights tiles in an enemy's attack range or bomb blast radius when hovered.
 fn show_enemy_attack_range(
     settings: Res<GameSettings>,
     grid: Res<HexGrid<TileData>>,
+    bomb_query: Query<(&Bomb, &HexPosition)>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut tile_query: Query<
         (
@@ -180,31 +214,37 @@ fn show_enemy_attack_range(
         return;
     }
 
-    // Collect which hexes should be highlighted
-    let mut highlighted_hexes = Vec::new();
+    // Enemy attack range hexes
+    let mut attack_hexes = Vec::new();
     if let Some(enemy_entity) = settings.hovered_enemy {
         for pos in grid.positions() {
             if let Some(tile) = grid.get(pos) {
                 if tile.attack_ranges.contains(&enemy_entity) {
-                    highlighted_hexes.push(pos);
+                    attack_hexes.push(pos);
                 }
             }
         }
     }
 
-    for (hex_pos, mut mat_handle, rest) in &mut tile_query {
-        let is_in_range = highlighted_hexes.contains(&hex_pos.0);
-        let is_traversable = grid.get(hex_pos.0).map(|t| t.traversable).unwrap_or(true);
+    // Bomb blast radius hexes
+    let mut bomb_hexes = Vec::new();
+    if let Some(bomb_entity) = settings.hovered_bomb {
+        if let Ok((bomb, bomb_pos)) = bomb_query.get(bomb_entity) {
+            bomb_hexes = bomb_pos.0.spiral(bomb.blast_radius);
+        }
+    }
 
+    for (hex_pos, mut mat_handle, rest) in &mut tile_query {
+        let is_traversable = grid.get(hex_pos.0).map(|t| t.traversable).unwrap_or(true);
         if !is_traversable {
             continue;
         }
 
-        if is_in_range {
-            let attack_matl = materials.add(ColorMaterial::from_color(ATTACK_RANGE_COLOR));
-            mat_handle.0 = attack_matl;
+        if bomb_hexes.contains(&hex_pos.0) {
+            mat_handle.0 = materials.add(ColorMaterial::from_color(BOMB_RANGE_COLOR));
+        } else if attack_hexes.contains(&hex_pos.0) {
+            mat_handle.0 = materials.add(ColorMaterial::from_color(ATTACK_RANGE_COLOR));
         } else {
-            // Restore to the tile's original material
             mat_handle.0 = rest.0.clone();
         }
     }
@@ -218,6 +258,49 @@ fn update_material_on<E: EntityEvent>(
             material.0 = new_material.clone();
         }
     }
+}
+
+/// Build the extruded side faces for a hex tile (visible bottom 3 edges).
+/// Creates quads that drop down from the bottom edges of the hex top face.
+fn create_hex_side_mesh(size: f32, height: f32) -> Mesh {
+    // Flat-topped hex vertices (same as top face, indices 1..=6 in the top mesh)
+    let hex_verts: Vec<[f32; 2]> = (0..6)
+        .map(|i| {
+            let angle_rad = (60.0 * i as f32).to_radians();
+            [size * angle_rad.cos(), size * angle_rad.sin() * ISO_Y_SCALE]
+        })
+        .collect();
+
+    // Bottom 3 edges of the hex (visible from above in iso view).
+    // For a flat-top hex: edges connecting vertices 2→3, 3→4, 4→5
+    // (these are the lower-left, bottom, and lower-right edges)
+    let visible_edges: &[(usize, usize)] = &[(2, 3), (3, 4), (4, 5)];
+
+    let mut positions = Vec::new();
+    let mut indices = Vec::new();
+
+    for &(a, b) in visible_edges {
+        let base = positions.len() as u32;
+        let [ax, ay] = hex_verts[a];
+        let [bx, by] = hex_verts[b];
+
+        // Quad: top-left, top-right, bottom-right, bottom-left
+        positions.push([ax, ay, 0.0]);
+        positions.push([bx, by, 0.0]);
+        positions.push([bx, by - height, 0.0]);
+        positions.push([ax, ay - height, 0.0]);
+
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    let normals: Vec<[f32; 3]> = (0..positions.len()).map(|_| [0.0, 0.0, 1.0]).collect();
+    let uvs: Vec<[f32; 2]> = positions.iter().map(|_| [0.0, 0.0]).collect();
+
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices))
 }
 
 /// Build a flat-topped hex mesh with isometric y-squash baked into vertices.

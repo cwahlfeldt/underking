@@ -40,6 +40,8 @@ pub enum TurnPhase {
 pub struct GameSettings {
     pub selected_hex: Option<Hex>,
     pub hovered_enemy: Option<Entity>,
+    /// Currently hovered bomb entity (to show blast radius).
+    pub hovered_bomb: Option<Entity>,
     /// Player's hex before the current move, used by combat resolution.
     pub player_prev_hex: Option<Hex>,
 }

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::{
-    components::{HexPosition, MovePath, Stats},
+    components::{AttackPattern, HexPosition, MovePath, Stats},
     hex::{HEX_SIZE, Hex, HexGrid},
     turn::{TurnPhase, TurnState},
 };
@@ -36,7 +36,19 @@ pub fn is_passable(grid: &HexGrid<TileData>, hex: Hex) -> bool {
 }
 
 /// Update the move/attack range overlays for an entity at `pos`.
+/// Uses radial (spiral) attack pattern by default.
 pub fn update_ranges(grid: &mut HexGrid<TileData>, pos: Hex, entity: Entity, stats: &Stats) {
+    update_ranges_with_pattern(grid, pos, entity, stats, None);
+}
+
+/// Update ranges with an optional custom attack pattern.
+pub fn update_ranges_with_pattern(
+    grid: &mut HexGrid<TileData>,
+    pos: Hex,
+    entity: Entity,
+    stats: &Stats,
+    pattern: Option<&AttackPattern>,
+) {
     if stats.move_range > 0 {
         let move_hexes: Vec<Hex> = pos
             .spiral(stats.move_range)
@@ -51,11 +63,26 @@ pub fn update_ranges(grid: &mut HexGrid<TileData>, pos: Hex, entity: Entity, sta
         }
     }
 
-    let attack_hexes: Vec<Hex> = pos
-        .spiral(stats.attack_range)
-        .into_iter()
-        .filter(|&h| h != pos && grid.contains(h))
-        .collect();
+    let attack_hexes: Vec<Hex> = match pattern {
+        Some(AttackPattern::DiagonalRanged { min_range, max_range }) => {
+            pos.diagonal_attack_hexes(*min_range, *max_range)
+                .into_iter()
+                .filter(|&h| grid.contains(h))
+                .collect()
+        }
+        Some(AttackPattern::AllDirectionsRanged { min_range, max_range }) => {
+            pos.all_directions_attack_hexes(*min_range, *max_range)
+                .into_iter()
+                .filter(|&h| grid.contains(h))
+                .collect()
+        }
+        _ => {
+            pos.spiral(stats.attack_range)
+                .into_iter()
+                .filter(|&h| h != pos && grid.contains(h))
+                .collect()
+        }
+    };
 
     for hex in attack_hexes {
         if let Some(tile) = grid.get_mut(hex) {
@@ -88,6 +115,7 @@ pub fn move_entity(
     stats: &Stats,
     speed: f32,
     next_phase: TurnPhase,
+    attack_pattern: Option<&AttackPattern>,
 ) {
     if path.len() < 2 {
         return;
@@ -106,7 +134,7 @@ pub fn move_entity(
     }
 
     clear_ranges(grid, entity);
-    update_ranges(grid, destination, entity, stats);
+    update_ranges_with_pattern(grid, destination, entity, stats, attack_pattern);
 
     let waypoints: Vec<Vec2> = path
         .iter()

@@ -404,6 +404,7 @@ fn handle_player_move(
             stats,
             MOVE_SPEED,
             TurnPhase::Combat(CombatPhase::AfterPlayerMove),
+            None,
         );
     }
 }

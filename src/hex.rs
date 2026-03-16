@@ -100,6 +100,44 @@ impl Hex {
         Hex::new(self.q * factor, self.r * factor, self.s * factor)
     }
 
+    /// Return hexes on the NE-SW and NW-SE diagonals at distances `min_range..=max_range`.
+    /// NE-SW axis: delta.s == 0 (direction (1,-1,0) and (-1,1,0))
+    /// NW-SE axis: delta.q == 0 (direction (0,-1,1) and (0,1,-1))
+    pub fn diagonal_attack_hexes(self, min_range: i32, max_range: i32) -> Vec<Hex> {
+        let dirs = [
+            Hex::axial(1, -1),  // NE
+            Hex::axial(-1, 1),  // SW
+            Hex::axial(0, -1),  // NW
+            Hex::axial(0, 1),   // SE
+        ];
+        let mut result = Vec::new();
+        for dir in dirs {
+            for dist in min_range..=max_range {
+                result.push(self + dir.scale(dist));
+            }
+        }
+        result
+    }
+
+    /// Return hexes along all 6 hex directions at distances `min_range..=max_range`.
+    pub fn all_directions_attack_hexes(self, min_range: i32, max_range: i32) -> Vec<Hex> {
+        let dirs = [
+            Hex::axial(1, 0),   // E
+            Hex::axial(-1, 0),  // W
+            Hex::axial(1, -1),  // NE
+            Hex::axial(-1, 1),  // SW
+            Hex::axial(0, -1),  // NW
+            Hex::axial(0, 1),   // SE
+        ];
+        let mut result = Vec::new();
+        for dir in dirs {
+            for dist in min_range..=max_range {
+                result.push(self + dir.scale(dist));
+            }
+        }
+        result
+    }
+
     /// Convert to flat-topped hex world-space center point.
     pub fn to_pixel(self, size: f32) -> (f32, f32) {
         let q = self.q as f32;
@@ -592,5 +630,29 @@ mod tests {
         let grid: HexGrid<()> = HexGrid::new(1);
         let result = grid.astar(Hex::ORIGIN, Hex::axial(5, 0), |_| true);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn diagonal_attack_hexes_count() {
+        // 4 directions × 3 distances (2,3,4) = 12 hexes
+        let hexes = Hex::ORIGIN.diagonal_attack_hexes(2, 4);
+        assert_eq!(hexes.len(), 12);
+    }
+
+    #[test]
+    fn diagonal_attack_hexes_on_correct_axes() {
+        let origin = Hex::ORIGIN;
+        for h in origin.diagonal_attack_hexes(2, 4) {
+            let dq = h.q - origin.q;
+            let ds = h.s - origin.s;
+            // Must be on NE-SW axis (ds == 0) or NW-SE axis (dq == 0)
+            assert!(
+                dq == 0 || ds == 0,
+                "hex {:?} not on a valid diagonal from origin",
+                h
+            );
+            let dist = origin.distance(h);
+            assert!(dist >= 2 && dist <= 4, "distance {} out of range", dist);
+        }
     }
 }

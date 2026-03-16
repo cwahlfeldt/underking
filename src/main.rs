@@ -11,7 +11,7 @@ mod undo;
 use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 
-use crate::components::{Dead, GameEntity, Health, HexPosition, MovePath, Stats};
+use crate::components::{Bomb, Dead, GameEntity, Health, HexPosition, MovePath, Stats};
 use crate::entities::enemy::Enemy;
 use crate::entities::player::Player;
 use crate::turn::{GameSettings, PendingKills, Turn, TurnPhase, TurnState};
@@ -21,6 +21,7 @@ fn main() {
         .insert_resource(GameSettings {
             selected_hex: None,
             hovered_enemy: None,
+            hovered_bomb: None,
             player_prev_hex: None,
         })
         .insert_resource(TurnState::Active(Turn::Player))
@@ -37,7 +38,7 @@ fn main() {
             (check_animation_done, combat::resolve_combat).chain(),
         )
         .add_systems(Startup, (setup, spawn_health_ui, spawn_reset_button))
-        .add_systems(Update, (update_health_ui, unlock_player_on_clear, handle_reset))
+        .add_systems(Update, (update_health_ui, unlock_player_on_clear, handle_reset, tick_bombs))
         .run();
 }
 
@@ -160,6 +161,7 @@ fn handle_reset(
     *game_settings = GameSettings {
         selected_hex: None,
         hovered_enemy: None,
+        hovered_bomb: None,
         player_prev_hex: None,
     };
     pending_kills.0.clear();
@@ -175,6 +177,64 @@ fn handle_reset(
         let _ = world.run_system_once(crate::entities::player::spawn_player);
         let _ = world.run_system_once(crate::entities::enemy::spawn_enemies);
     });
+}
+
+/// Tick bomb fuses at the start of each player turn. Explode when timer hits 0.
+fn tick_bombs(
+    mut commands: Commands,
+    turn: Res<TurnState>,
+    mut was_player_turn: Local<bool>,
+    mut bomb_query: Query<(Entity, &mut Bomb, &HexPosition)>,
+    mut health_query: Query<(Entity, &HexPosition, &mut Health)>,
+    mut grid: ResMut<crate::hex::HexGrid<crate::grid::TileData>>,
+) {
+    let is_player_turn = *turn == TurnState::Active(Turn::Player);
+
+    // Only tick on the transition INTO the player's turn
+    if !is_player_turn || *was_player_turn {
+        *was_player_turn = is_player_turn;
+        return;
+    }
+    *was_player_turn = true;
+
+    let mut explosions: Vec<(Entity, crate::hex::Hex, i32, f32)> = Vec::new();
+
+    for (bomb_entity, mut bomb, bomb_pos) in &mut bomb_query {
+        if bomb.turns_remaining == 0 {
+            explosions.push((bomb_entity, bomb_pos.0, bomb.blast_radius, bomb.damage));
+        } else {
+            bomb.turns_remaining -= 1;
+        }
+    }
+
+    for (bomb_entity, bomb_hex, radius, damage) in explosions {
+        let blast_hexes = bomb_hex.spiral(radius);
+
+        // Collect damage targets first, then apply
+        let mut damaged: Vec<(Entity, crate::hex::Hex, f32)> = Vec::new();
+        for (entity, pos, mut health) in &mut health_query {
+            if blast_hexes.contains(&pos.0) {
+                info!("Bomb at {:?} damages {:?} for {}", bomb_hex, entity, damage);
+                health.current -= damage;
+                if health.current <= 0.0 {
+                    damaged.push((entity, pos.0, health.current));
+                }
+            }
+        }
+
+        // Kill entities that died from the blast
+        for (entity, hex, _) in damaged {
+            commands.entity(entity).insert((Dead, Visibility::Hidden));
+            if let Some(tile) = grid.get_mut(hex) {
+                if tile.occupant == Some(entity) {
+                    tile.occupant = None;
+                }
+            }
+            crate::grid::clear_ranges(&mut grid, entity);
+        }
+
+        commands.entity(bomb_entity).despawn();
+    }
 }
 
 /// When all MovePath animations finish, advance to the next phase.

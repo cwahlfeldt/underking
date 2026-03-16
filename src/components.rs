@@ -23,6 +23,39 @@ pub struct Stats {
     pub attack_range: i32,
 }
 
+/// Distinguishes enemy behavior types.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnemyKind {
+    Melee,
+    Archer,
+    Warlock,
+    Bomber,
+}
+
+/// Overrides how an entity's attack range is computed on the grid.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttackPattern {
+    /// Standard filled radius (spiral).
+    Radial,
+    /// Two diagonal axes (NE-SW and NW-SE), with a minimum and maximum distance.
+    DiagonalRanged { min_range: i32, max_range: i32 },
+    /// All six hex directions as straight lines, with a minimum and maximum distance.
+    AllDirectionsRanged { min_range: i32, max_range: i32 },
+}
+
+/// A bomb placed on a hex tile. Explodes after `turns_remaining` player turns.
+#[derive(Component)]
+pub struct Bomb {
+    /// The entity that threw this bomb.
+    pub owner: Entity,
+    /// Turns until detonation. Ticked down at the start of each player turn.
+    pub turns_remaining: u8,
+    /// Hex radius of the explosion.
+    pub blast_radius: i32,
+    /// Damage dealt to entities in the blast.
+    pub damage: f32,
+}
+
 /// Attached to an entity to animate it along a hex path.
 /// Waypoints are pixel-space (x, y) positions for each hex in the path.
 /// The entity lerps from one waypoint to the next at `speed` pixels/sec.
