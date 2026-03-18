@@ -6,7 +6,7 @@ use crate::{
         AttackAnimation, AttackPhase, GameEntity, Health, HexPosition, MovePath, Stats, ZOffset,
     },
     grid::{TileData, is_passable, move_entity, update_ranges},
-    hex::{HEX_SIZE, Hex, HexGrid, iso_z_from_y},
+    hex::{Hex, HexGrid, iso_z_from_y},
     render::MOVE_SPEED,
     turn::{CombatPhase, GameSettings, Turn, TurnPhase, TurnState},
 };
@@ -397,14 +397,15 @@ fn handle_player_move(
         move_entity(
             &mut commands,
             &mut grid,
-            &mut turn,
             entity,
             &mut hex_pos,
             &path,
             stats,
             MOVE_SPEED,
-            TurnPhase::Combat(CombatPhase::AfterPlayerMove),
             None,
         );
+        *turn = TurnState::Animating {
+            next: TurnPhase::Combat(CombatPhase::AfterPlayerMove),
+        };
     }
 }

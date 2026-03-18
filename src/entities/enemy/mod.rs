@@ -8,11 +8,12 @@ use rand::seq::SliceRandom;
 
 use crate::{
     components::{
-        AttackPattern, Bomb, Dead, EnemyKind, HexPosition, MovePath, SkipTurn, Stats, ZOffset,
+        AttackPattern, Bomb, Dead, EnemyKind, GameEntity, Health, HexPosition, MovePath, SkipTurn,
+        Stats, ZOffset,
     },
     entities::player::Player,
-    grid::{TileData, clear_ranges, is_passable, update_ranges_with_pattern},
-    hex::{HEX_SIZE, Hex, HexGrid},
+    grid::{self, TileData, is_passable},
+    hex::{Hex, HexGrid},
     level::LevelConfig,
     render::MOVE_SPEED,
     turn::{Turn, TurnPhase, TurnState},
@@ -40,6 +41,50 @@ pub struct EnemyTurnQueue(pub Vec<Entity>);
 
 const MIN_SPAWN_DISTANCE: i32 = 4;
 
+// --- Shared spawn helper ---
+
+fn spawn_enemy(
+    commands: &mut Commands,
+    grid: &mut HexGrid<TileData>,
+    hex: Hex,
+    kind: EnemyKind,
+    stats: Stats,
+    health: Health,
+    attack_pattern: Option<AttackPattern>,
+) -> Entity {
+    let mut ec = commands.spawn((
+        Enemy,
+        GameEntity,
+        kind,
+        health,
+        HexPosition(hex),
+        Stats {
+            move_range: stats.move_range,
+            attack_range: stats.attack_range,
+        },
+    ));
+
+    if let Some(pattern) = attack_pattern {
+        ec.insert(pattern);
+    }
+
+    let entity = ec.id();
+
+    if let Some(tile) = grid.get_mut(hex) {
+        tile.occupant = Some(entity);
+    }
+
+    grid::update_ranges_with_pattern(
+        grid,
+        hex,
+        entity,
+        &stats,
+        attack_pattern.as_ref(),
+    );
+
+    entity
+}
+
 pub fn spawn_enemies(
     mut commands: Commands,
     mut grid: ResMut<HexGrid<TileData>>,
@@ -61,20 +106,63 @@ pub fn spawn_enemies(
         .collect();
     candidates.shuffle(&mut rng);
 
-    let grunt_count = level.grunts.min(candidates.len());
-    grunt::spawn_grunts(&mut commands, &mut grid, &candidates[..grunt_count]);
+    let mut idx = 0;
 
-    let after_grunts = &candidates[grunt_count..];
-    let archer_count = level.archers.min(after_grunts.len());
-    archer::spawn_archers(&mut commands, &mut grid, &after_grunts[..archer_count]);
+    // Grunts
+    for _ in 0..level.grunts.min(candidates.len() - idx) {
+        spawn_enemy(
+            &mut commands,
+            &mut grid,
+            candidates[idx],
+            EnemyKind::Melee,
+            Stats { move_range: 1, attack_range: 1 },
+            Health { current: 1.0, max: 1.0 },
+            None,
+        );
+        idx += 1;
+    }
 
-    let after_archers = &after_grunts[archer_count..];
-    let warlock_count = level.warlocks.min(after_archers.len());
-    warlock::spawn_warlocks(&mut commands, &mut grid, &after_archers[..warlock_count]);
+    // Archers
+    for _ in 0..level.archers.min(candidates.len() - idx) {
+        spawn_enemy(
+            &mut commands,
+            &mut grid,
+            candidates[idx],
+            EnemyKind::Archer,
+            Stats { move_range: 1, attack_range: 4 },
+            Health { current: 1.0, max: 1.0 },
+            Some(archer::ATTACK_PATTERN),
+        );
+        idx += 1;
+    }
 
-    let after_warlocks = &after_archers[warlock_count..];
-    let bomber_count = level.bombers.min(after_warlocks.len());
-    bomber::spawn_bombers(&mut commands, &mut grid, &after_warlocks[..bomber_count]);
+    // Warlocks
+    for _ in 0..level.warlocks.min(candidates.len() - idx) {
+        spawn_enemy(
+            &mut commands,
+            &mut grid,
+            candidates[idx],
+            EnemyKind::Warlock,
+            Stats { move_range: 1, attack_range: 5 },
+            Health { current: 1.0, max: 1.0 },
+            Some(warlock::ATTACK_PATTERN),
+        );
+        idx += 1;
+    }
+
+    // Bombers
+    for _ in 0..level.bombers.min(candidates.len() - idx) {
+        spawn_enemy(
+            &mut commands,
+            &mut grid,
+            candidates[idx],
+            EnemyKind::Bomber,
+            Stats { move_range: 1, attack_range: 0 },
+            Health { current: 1.0, max: 1.0 },
+            None,
+        );
+        idx += 1;
+    }
 
     commands.insert_resource(EnemyTurnQueue::default());
 }
@@ -94,6 +182,57 @@ fn render_enemy(mut commands: Commands, query: Query<(Entity, &EnemyKind), Added
             ZOffset(1.0),
         ));
     }
+}
+
+// --- Shared AI helpers ---
+
+/// Pathfind toward `target` and take up to `max_steps` steps, stopping at occupied tiles.
+/// Returns (destination, path_including_current).
+pub fn pathfind_and_step(
+    grid: &HexGrid<TileData>,
+    current: Hex,
+    target: Hex,
+    max_steps: i32,
+) -> (Hex, Vec<Hex>) {
+    let path = grid.astar(current, target, |h| {
+        if h == target {
+            return true;
+        }
+        is_passable(grid, h)
+    });
+
+    let mut destination = current;
+    let mut move_path = vec![current];
+
+    if let Some(path) = &path {
+        let steps = (path.len() - 1).min(max_steps as usize);
+        for i in 1..=steps {
+            let candidate = path[i];
+            if grid::is_occupied(grid, candidate) {
+                break;
+            }
+            destination = candidate;
+            move_path.push(candidate);
+        }
+    }
+
+    (destination, move_path)
+}
+
+/// Pick a random passable neighbor matching `filter`, or None.
+pub fn random_passable_neighbor(
+    grid: &HexGrid<TileData>,
+    current: Hex,
+    filter: impl Fn(Hex) -> bool,
+) -> Option<Hex> {
+    let mut neighbors: Vec<Hex> = grid
+        .neighbors(current)
+        .into_iter()
+        .filter(|&h| is_passable(grid, h) && filter(h))
+        .collect();
+    let mut rng = rand::rng();
+    neighbors.shuffle(&mut rng);
+    neighbors.first().copied()
 }
 
 fn move_enemies(
@@ -160,11 +299,9 @@ fn move_enemies(
 
     // Bomber has a special action: throw bomb or move
     if *kind == EnemyKind::Bomber {
-        // Check if this bomber already has a bomb out
         let has_bomb = bomb_query.iter().any(|b| b.owner == entity);
 
         let action = if has_bomb {
-            // Can't throw — just move instead
             let (dest, path) = grunt::compute_move(&grid, current, player_hex, stats);
             bomber::BomberAction::Move(dest, path)
         } else {
@@ -172,26 +309,22 @@ fn move_enemies(
         };
 
         match action {
-            bomber::BomberAction::ThrowBomb {
-                bomber_hex: _,
-                target_hex,
-            } => {
+            bomber::BomberAction::ThrowBomb { target_hex } => {
                 bomber::spawn_bomb(&mut commands, entity, target_hex);
                 did_act = true;
-                // Bomber stays in place after throwing
             }
             bomber::BomberAction::Move(destination, move_path) => {
                 if destination != current {
                     did_act = true;
-                    apply_move(
+                    move_order.0.push(entity);
+                    grid::move_entity(
                         &mut commands,
                         &mut grid,
-                        &mut move_order,
                         entity,
                         &mut hex_pos,
-                        destination,
                         &move_path,
                         stats,
+                        MOVE_SPEED,
                         attack_pattern,
                     );
                 }
@@ -207,15 +340,15 @@ fn move_enemies(
 
         if destination != current {
             did_act = true;
-            apply_move(
+            move_order.0.push(entity);
+            grid::move_entity(
                 &mut commands,
                 &mut grid,
-                &mut move_order,
                 entity,
                 &mut hex_pos,
-                destination,
                 &move_path,
                 stats,
+                MOVE_SPEED,
                 attack_pattern,
             );
         }
@@ -230,47 +363,4 @@ fn move_enemies(
             *turn = TurnState::Active(Turn::Player);
         }
     }
-}
-
-/// Shared helper: apply a movement for an enemy entity.
-fn apply_move(
-    commands: &mut Commands,
-    grid: &mut HexGrid<TileData>,
-    move_order: &mut crate::undo::TurnMoveOrder,
-    entity: Entity,
-    hex_pos: &mut HexPosition,
-    destination: Hex,
-    move_path: &[Hex],
-    stats: &Stats,
-    attack_pattern: Option<&AttackPattern>,
-) {
-    move_order.0.push(entity);
-
-    let old_pos = hex_pos.0;
-    hex_pos.0 = destination;
-
-    if let Some(tile) = grid.get_mut(old_pos) {
-        tile.occupant = None;
-    }
-    if let Some(tile) = grid.get_mut(destination) {
-        tile.occupant = Some(entity);
-    }
-
-    clear_ranges(grid, entity);
-    update_ranges_with_pattern(grid, destination, entity, stats, attack_pattern);
-
-    let waypoints: Vec<Vec2> = move_path
-        .iter()
-        .map(|h| {
-            let (x, y) = h.to_iso_pixel(HEX_SIZE);
-            Vec2::new(x, y)
-        })
-        .collect();
-
-    commands.entity(entity).insert(MovePath {
-        waypoints,
-        current_index: 0,
-        progress: 0.0,
-        speed: MOVE_SPEED,
-    });
 }

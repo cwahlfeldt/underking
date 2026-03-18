@@ -35,8 +35,6 @@ pub enum EnemyKind {
 /// Overrides how an entity's attack range is computed on the grid.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttackPattern {
-    /// Standard filled radius (spiral).
-    Radial,
     /// Two diagonal axes (NE-SW and NW-SE), with a minimum and maximum distance.
     DiagonalRanged { min_range: i32, max_range: i32 },
     /// All six hex directions as straight lines, with a minimum and maximum distance.
@@ -99,10 +97,6 @@ pub struct AttackAnimation {
     pub home: Vec2,
     /// Pixel position of the target enemy's hex (lunge destination).
     pub target: Vec2,
-    /// Entity being attacked (to kill when animation finishes).
-    pub target_entity: Entity,
-    /// Hex of the target (to clear from grid).
-    pub target_hex: crate::hex::Hex,
     /// 0.0..1.0 progress through the current phase.
     pub progress: f32,
     /// Speed in pixels/sec.

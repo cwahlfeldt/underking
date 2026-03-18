@@ -161,12 +161,10 @@ fn update_debug_panel(
             TurnPhase::Turn(Turn::Player) => "ANIMATING -> Player",
             TurnPhase::Turn(Turn::Enemy) => "ANIMATING -> Enemy",
             TurnPhase::Combat(CombatPhase::AfterPlayerMove) => "ANIMATING -> Combat (Player)",
-            TurnPhase::Combat(CombatPhase::AfterEnemyMove) => "ANIMATING -> Combat (Enemy)",
             TurnPhase::Combat(CombatPhase::PlayerAttackAnimating) => "ANIMATING -> Attack Anim",
         },
         TurnState::Combat(CombatPhase::AfterPlayerMove) => "COMBAT (After Player)",
         TurnState::Combat(CombatPhase::PlayerAttackAnimating) => "ATTACK ANIMATING",
-        TurnState::Combat(CombatPhase::AfterEnemyMove) => "COMBAT (After Enemy)",
     };
     lines.push(format!("--- {turn_label} ---\n"));
 

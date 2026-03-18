@@ -15,8 +15,6 @@ pub enum CombatPhase {
     AfterPlayerMove,
     /// Waiting for player attack animation to finish before applying kills.
     PlayerAttackAnimating,
-    /// After all enemies move: (reserved for future use).
-    AfterEnemyMove,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]

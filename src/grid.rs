@@ -3,12 +3,12 @@ use bevy::prelude::*;
 use crate::{
     components::{AttackPattern, HexPosition, MovePath, Stats},
     hex::{HEX_SIZE, Hex, HexGrid},
-    turn::{TurnPhase, TurnState},
 };
 
 /// Per-cell game state stored in the hex grid.
 #[derive(Debug, Clone)]
 pub struct TileData {
+    #[allow(dead_code)]
     pub tile_entity: Option<Entity>,
     pub occupant: Option<Entity>,
     pub traversable: bool,
@@ -28,11 +28,18 @@ impl Default for TileData {
     }
 }
 
-/// Returns true if the tile at `hex` is a valid movement target.
+/// Returns true if the tile at `hex` is a valid movement target (traversable and unoccupied).
 pub fn is_passable(grid: &HexGrid<TileData>, hex: Hex) -> bool {
     grid.get(hex)
         .map(|t| t.traversable && t.occupant.is_none())
         .unwrap_or(false)
+}
+
+/// Returns true if the tile at `hex` has an occupant.
+pub fn is_occupied(grid: &HexGrid<TileData>, hex: Hex) -> bool {
+    grid.get(hex)
+        .map(|t| t.occupant.is_some())
+        .unwrap_or(true)
 }
 
 /// Update the move/attack range overlays for an entity at `pos`.
@@ -102,23 +109,20 @@ pub fn clear_ranges(grid: &mut HexGrid<TileData>, entity: Entity) {
     }
 }
 
-/// Move an entity from its current hex to `destination` along `path`.
-/// Updates grid occupancy, ranges, and inserts a `MovePath` for animation.
-/// Sets `turn` to `Animating { next }`.
+/// Move an entity along `path`, updating grid occupancy, ranges, and inserting a `MovePath` animation.
+/// Returns true if the entity actually moved (path has at least 2 hexes).
 pub fn move_entity(
     commands: &mut Commands,
     grid: &mut HexGrid<TileData>,
-    turn: &mut TurnState,
     entity: Entity,
     hex_pos: &mut HexPosition,
     path: &[Hex],
     stats: &Stats,
     speed: f32,
-    next_phase: TurnPhase,
     attack_pattern: Option<&AttackPattern>,
-) {
+) -> bool {
     if path.len() < 2 {
-        return;
+        return false;
     }
 
     let old_pos = hex_pos.0;
@@ -151,7 +155,7 @@ pub fn move_entity(
         speed,
     });
 
-    *turn = TurnState::Animating { next: next_phase };
+    true
 }
 
 #[cfg(test)]

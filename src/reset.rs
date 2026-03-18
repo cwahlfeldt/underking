@@ -1,0 +1,156 @@
+use bevy::ecs::system::RunSystemOnce;
+use bevy::prelude::*;
+
+use crate::{
+    components::{Dead, GameEntity, HexPosition, Stats},
+    entities::enemy::Enemy,
+    entities::player::Player,
+    level::LevelConfig,
+    turn::{GameSettings, PendingKills, Turn, TurnState},
+};
+
+pub struct ResetPlugin;
+
+impl Plugin for ResetPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Startup, spawn_reset_button)
+            .add_systems(Update, (handle_reset, advance_level_on_clear));
+    }
+}
+
+/// Despawn all game entities and reset all game state resources, then respawn the world.
+fn reset_game_world(
+    commands: &mut Commands,
+    game_entities: &Query<Entity, With<GameEntity>>,
+    turn: &mut TurnState,
+    game_settings: &mut GameSettings,
+    pending_kills: &mut PendingKills,
+    history: &mut crate::undo::UndoHistory,
+    move_order: &mut crate::undo::TurnMoveOrder,
+) {
+    for entity in game_entities {
+        commands.entity(entity).despawn();
+    }
+
+    *turn = TurnState::Active(Turn::Player);
+    *game_settings = GameSettings {
+        selected_hex: None,
+        hovered_enemy: None,
+        hovered_bomb: None,
+        player_prev_hex: None,
+    };
+    pending_kills.0.clear();
+    *history = crate::undo::UndoHistory::default();
+    move_order.0.clear();
+
+    commands.remove_resource::<crate::hex::HexGrid<crate::grid::TileData>>();
+
+    commands.queue(|world: &mut World| {
+        let _ = world.run_system_once(crate::entities::tile::spawn_tiles);
+        let _ = world.run_system_once(crate::entities::player::spawn_player);
+        let _ = world.run_system_once(crate::entities::enemy::spawn_enemies);
+    });
+}
+
+/// When all enemies are dead, advance to the next level (or unlock free movement on the last level).
+fn advance_level_on_clear(
+    mut commands: Commands,
+    enemies: Query<(), (With<Enemy>, Without<Dead>)>,
+    mut player: Query<(Entity, &HexPosition, &mut Stats), With<Player>>,
+    mut grid: ResMut<crate::hex::HexGrid<crate::grid::TileData>>,
+    mut level_config: ResMut<LevelConfig>,
+    mut turn: ResMut<TurnState>,
+    mut game_settings: ResMut<GameSettings>,
+    mut pending_kills: ResMut<PendingKills>,
+    mut history: ResMut<crate::undo::UndoHistory>,
+    mut move_order: ResMut<crate::undo::TurnMoveOrder>,
+    game_entities: Query<Entity, With<GameEntity>>,
+) {
+    if !enemies.is_empty() {
+        return;
+    }
+    let Ok((entity, pos, mut stats)) = player.single_mut() else {
+        return;
+    };
+    if stats.move_range == 0 {
+        return;
+    }
+
+    if level_config.advance() {
+        stats.move_range = 0; // prevent re-entry
+        drop(player);
+        reset_game_world(
+            &mut commands,
+            &game_entities,
+            &mut turn,
+            &mut game_settings,
+            &mut pending_kills,
+            &mut history,
+            &mut move_order,
+        );
+    } else {
+        // Last level cleared: unlock free movement
+        stats.move_range = 0;
+        crate::grid::clear_ranges(&mut grid, entity);
+        crate::grid::update_ranges(&mut grid, pos.0, entity, &stats);
+    }
+}
+
+#[derive(Component)]
+struct ResetButton;
+
+fn spawn_reset_button(mut commands: Commands) {
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(16.0),
+            top: Val::Px(16.0),
+            ..default()
+        })
+        .with_child((
+            ResetButton,
+            Button,
+            Node {
+                padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.3, 0.3, 0.3, 0.8)),
+            children![(
+                Text::new("Reset"),
+                TextFont {
+                    font_size: 20.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            )],
+        ));
+}
+
+fn handle_reset(
+    mut commands: Commands,
+    interaction: Query<&Interaction, (Changed<Interaction>, With<ResetButton>)>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    game_entities: Query<Entity, With<GameEntity>>,
+    mut turn: ResMut<TurnState>,
+    mut game_settings: ResMut<GameSettings>,
+    mut pending_kills: ResMut<PendingKills>,
+    mut history: ResMut<crate::undo::UndoHistory>,
+    mut move_order: ResMut<crate::undo::TurnMoveOrder>,
+) {
+    let clicked = interaction.iter().any(|i| *i == Interaction::Pressed);
+    let key_pressed = keyboard.just_pressed(KeyCode::KeyR);
+
+    if !clicked && !key_pressed {
+        return;
+    }
+
+    reset_game_world(
+        &mut commands,
+        &game_entities,
+        &mut turn,
+        &mut game_settings,
+        &mut pending_kills,
+        &mut history,
+        &mut move_order,
+    );
+}

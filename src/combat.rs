@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::{
-    components::{AttackAnimation, AttackPhase, Dead, Health, HexPosition, SkipTurn, Stats},
+    components::{AttackAnimation, AttackPhase, Bomb, Dead, Health, HexPosition, SkipTurn, Stats},
     entities::{enemy::Enemy, player::Player},
     grid::{self, TileData},
     hex::{HexGrid, HEX_SIZE},
@@ -63,8 +63,6 @@ pub fn resolve_combat(
                 commands.entity(player_entity).insert(AttackAnimation {
                     home: Vec2::new(px, py),
                     target: Vec2::new(ex, ey),
-                    target_entity: killed_enemies[0].0,
-                    target_hex: first_enemy_hex,
                     progress: 0.0,
                     speed: MOVE_SPEED * 1.8,
                     phase: AttackPhase::LungeForward,
@@ -122,9 +120,6 @@ pub fn resolve_combat(
 
             *turn = TurnState::Active(Turn::Enemy);
         }
-        CombatPhase::AfterEnemyMove => {
-            *turn = TurnState::Active(Turn::Player);
-        }
     }
 }
 
@@ -151,5 +146,61 @@ fn apply_enemy_attacks(
         if player_health.current <= 0.0 {
             info!("Player died!");
         }
+    }
+}
+
+/// Tick bomb fuses at the start of each player turn. Explode when timer hits 0.
+pub fn tick_bombs(
+    mut commands: Commands,
+    turn: Res<TurnState>,
+    mut was_player_turn: Local<bool>,
+    mut bomb_query: Query<(Entity, &mut Bomb, &HexPosition)>,
+    mut health_query: Query<(Entity, &HexPosition, &mut Health)>,
+    mut grid: ResMut<HexGrid<TileData>>,
+) {
+    let is_player_turn = *turn == TurnState::Active(Turn::Player);
+
+    // Only tick on the transition INTO the player's turn
+    if !is_player_turn || *was_player_turn {
+        *was_player_turn = is_player_turn;
+        return;
+    }
+    *was_player_turn = true;
+
+    let mut explosions: Vec<(Entity, crate::hex::Hex, i32, f32)> = Vec::new();
+
+    for (bomb_entity, mut bomb, bomb_pos) in &mut bomb_query {
+        if bomb.turns_remaining == 0 {
+            explosions.push((bomb_entity, bomb_pos.0, bomb.blast_radius, bomb.damage));
+        } else {
+            bomb.turns_remaining -= 1;
+        }
+    }
+
+    for (bomb_entity, bomb_hex, radius, damage) in explosions {
+        let blast_hexes = bomb_hex.spiral(radius);
+
+        let mut damaged: Vec<(Entity, crate::hex::Hex, f32)> = Vec::new();
+        for (entity, pos, mut health) in &mut health_query {
+            if blast_hexes.contains(&pos.0) {
+                info!("Bomb at {:?} damages {:?} for {}", bomb_hex, entity, damage);
+                health.current -= damage;
+                if health.current <= 0.0 {
+                    damaged.push((entity, pos.0, health.current));
+                }
+            }
+        }
+
+        for (entity, hex, _) in damaged {
+            commands.entity(entity).insert((Dead, Visibility::Hidden));
+            if let Some(tile) = grid.get_mut(hex) {
+                if tile.occupant == Some(entity) {
+                    tile.occupant = None;
+                }
+            }
+            grid::clear_ranges(&mut grid, entity);
+        }
+
+        commands.entity(bomb_entity).despawn();
     }
 }
