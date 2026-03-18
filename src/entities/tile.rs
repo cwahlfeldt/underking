@@ -9,19 +9,20 @@ use crate::{
     entities::enemy::Enemy,
     grid::TileData,
     hex::{HEX_SIZE, ISO_Y_SCALE, Hex, HexGrid},
+    level::LevelConfig,
     turn::GameSettings,
 };
 
 const GAP: f32 = 1.5;
 const EXTRUDE_HEIGHT: f32 = 18.0;
+const OUTLINE_THICKNESS: f32 = 3.0;
 const TILE_COLOR: Color = Color::srgb(0.25, 0.25, 0.25);
 const TILE_SIDE_COLOR: Color = Color::srgb(0.13, 0.13, 0.13);
 const WALL_COLOR: Color = Color::srgba(0.2, 0.2, 0.2, 0.2);
 const WALL_SIDE_COLOR: Color = Color::srgba(0.1, 0.1, 0.1, 0.2);
-const HIGHLIGHT_COLOR: Color = Color::srgba(0.2, 0.2, 0.8, 0.8);
-const ATTACK_RANGE_COLOR: Color = Color::srgb(0.6, 0.15, 0.15);
-pub const GRID_RADIUS: i32 = 4;
-const UNTRAVERSABLE_COUNT: usize = 10;
+const OUTLINE_DEFAULT_COLOR: Color = Color::srgba(0.4, 0.4, 0.4, 0.6);
+const HIGHLIGHT_COLOR: Color = Color::srgba(0.3, 0.3, 1.0, 1.0);
+const ATTACK_RANGE_COLOR: Color = Color::srgb(0.8, 0.15, 0.15);
 
 pub struct TilePlugin;
 
@@ -35,12 +36,20 @@ impl Plugin for TilePlugin {
 #[derive(Component)]
 pub struct Tile;
 
-/// Stores each tile's default (non-hovered) material handle for reliable restoration.
+/// Stores each tile's default (non-hovered) outline material for reliable restoration.
 #[derive(Component)]
-struct RestMaterial(Handle<ColorMaterial>);
+struct RestOutlineMaterial(Handle<ColorMaterial>);
 
-pub fn spawn_tiles(mut commands: Commands) {
-    let mut grid: HexGrid<TileData> = HexGrid::new(GRID_RADIUS);
+/// Points from the parent tile entity to its outline child entity.
+#[derive(Component)]
+struct OutlineChild(Entity);
+
+pub fn spawn_tiles(mut commands: Commands, level_config: Res<LevelConfig>) {
+    let level = level_config.current_level();
+    let grid_radius = level.grid_radius;
+    let wall_count = level.walls;
+
+    let mut grid: HexGrid<TileData> = HexGrid::new(grid_radius);
 
     // Pick random non-origin tiles to be untraversable
     let mut rng = rand::rng();
@@ -51,7 +60,7 @@ pub fn spawn_tiles(mut commands: Commands) {
         .copied()
         .collect();
     candidates.shuffle(&mut rng);
-    let walls: Vec<Hex> = candidates.into_iter().take(UNTRAVERSABLE_COUNT).collect();
+    let walls: Vec<Hex> = candidates.into_iter().take(wall_count).collect();
 
     for pos in &positions {
         let traversable = !walls.contains(pos);
@@ -79,6 +88,7 @@ fn render_tiles(
 ) {
     let hex_mesh = meshes.add(create_iso_hex_mesh(HEX_SIZE - GAP));
     let side_mesh = meshes.add(create_hex_side_mesh(HEX_SIZE - GAP, EXTRUDE_HEIGHT));
+    let outline_mesh = meshes.add(create_hex_outline_mesh(HEX_SIZE - GAP, OUTLINE_THICKNESS));
     let hover_matl = materials.add(ColorMaterial::from_color(HIGHLIGHT_COLOR));
 
     for (entity, hex_pos) in &query {
@@ -96,15 +106,28 @@ fn render_tiles(
 
         let matl = materials.add(ColorMaterial::from_color(top_color));
         let side_matl = materials.add(ColorMaterial::from_color(side_color));
-        let rest_matl = matl.clone();
+        let outline_matl = materials.add(ColorMaterial::from_color(OUTLINE_DEFAULT_COLOR));
+        let rest_outline_matl = outline_matl.clone();
+
+        // Spawn outline child entity
+        let outline_entity = commands
+            .spawn((
+                Mesh2d(outline_mesh.clone()),
+                MeshMaterial2d(outline_matl),
+                Transform::from_xyz(0.0, 0.0, 0.1),
+                Pickable::IGNORE,
+            ))
+            .id();
 
         let mut ec = commands.entity(entity);
         ec.insert((
             Mesh2d(hex_mesh.clone()),
-            MeshMaterial2d(matl.clone()),
-            RestMaterial(matl),
+            MeshMaterial2d(matl),
+            OutlineChild(outline_entity),
+            RestOutlineMaterial(rest_outline_matl.clone()),
             Transform::default(),
         ));
+        ec.add_child(outline_entity);
 
         // Spawn the extruded side as a child so it moves with the tile.
         // z = -0.1 so it renders behind the top face.
@@ -117,8 +140,8 @@ fn render_tiles(
 
         if traversable || occupant {
             ec.insert(Pickable::default())
-                .observe(update_material_on::<Pointer<Over>>(hover_matl.clone()))
-                .observe(update_material_on::<Pointer<Out>>(rest_matl))
+                .observe(update_outline_on::<Pointer<Over>>(hover_matl.clone()))
+                .observe(update_outline_on::<Pointer<Out>>(rest_outline_matl))
                 .observe(on_tile_click)
                 .observe(on_tile_over)
                 .observe(on_tile_out);
@@ -195,20 +218,21 @@ fn on_tile_out(
 
 const BOMB_RANGE_COLOR: Color = Color::srgb(0.9, 0.4, 0.0);
 
-/// Highlights tiles in an enemy's attack range or bomb blast radius when hovered.
+/// Highlights tile outlines in an enemy's attack range or bomb blast radius when hovered.
 fn show_enemy_attack_range(
     settings: Res<GameSettings>,
     grid: Res<HexGrid<TileData>>,
     bomb_query: Query<(&Bomb, &HexPosition)>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut tile_query: Query<
+    tile_query: Query<
         (
             &HexPosition,
-            &mut MeshMaterial2d<ColorMaterial>,
-            &RestMaterial,
+            &OutlineChild,
+            &RestOutlineMaterial,
         ),
         With<Tile>,
     >,
+    mut outline_mat_query: Query<&mut MeshMaterial2d<ColorMaterial>, Without<Tile>>,
 ) {
     if !settings.is_changed() {
         return;
@@ -234,28 +258,33 @@ fn show_enemy_attack_range(
         }
     }
 
-    for (hex_pos, mut mat_handle, rest) in &mut tile_query {
+    for (hex_pos, outline_child, rest) in &tile_query {
         let is_traversable = grid.get(hex_pos.0).map(|t| t.traversable).unwrap_or(true);
         if !is_traversable {
             continue;
         }
 
-        if bomb_hexes.contains(&hex_pos.0) {
-            mat_handle.0 = materials.add(ColorMaterial::from_color(BOMB_RANGE_COLOR));
-        } else if attack_hexes.contains(&hex_pos.0) {
-            mat_handle.0 = materials.add(ColorMaterial::from_color(ATTACK_RANGE_COLOR));
-        } else {
-            mat_handle.0 = rest.0.clone();
+        if let Ok(mut mat_handle) = outline_mat_query.get_mut(outline_child.0) {
+            if bomb_hexes.contains(&hex_pos.0) {
+                mat_handle.0 = materials.add(ColorMaterial::from_color(BOMB_RANGE_COLOR));
+            } else if attack_hexes.contains(&hex_pos.0) {
+                mat_handle.0 = materials.add(ColorMaterial::from_color(ATTACK_RANGE_COLOR));
+            } else {
+                mat_handle.0 = rest.0.clone();
+            }
         }
     }
 }
 
-fn update_material_on<E: EntityEvent>(
+fn update_outline_on<E: EntityEvent>(
     new_material: Handle<ColorMaterial>,
-) -> impl Fn(On<E>, Query<&mut MeshMaterial2d<ColorMaterial>>) {
-    move |ev, mut query| {
-        if let Ok(mut material) = query.get_mut(ev.event_target()) {
-            material.0 = new_material.clone();
+) -> impl Fn(On<E>, Query<&OutlineChild>, Query<&mut MeshMaterial2d<ColorMaterial>, Without<Tile>>)
+{
+    move |ev, outline_query, mut mat_query| {
+        if let Ok(outline_child) = outline_query.get(ev.event_target()) {
+            if let Ok(mut material) = mat_query.get_mut(outline_child.0) {
+                material.0 = new_material.clone();
+            }
         }
     }
 }
@@ -291,6 +320,45 @@ fn create_hex_side_mesh(size: f32, height: f32) -> Mesh {
         positions.push([ax, ay - height, 0.0]);
 
         indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+
+    let normals: Vec<[f32; 3]> = (0..positions.len()).map(|_| [0.0, 0.0, 1.0]).collect();
+    let uvs: Vec<[f32; 2]> = positions.iter().map(|_| [0.0, 0.0]).collect();
+
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Build a hex outline (ring) mesh — only the border, not filled.
+fn create_hex_outline_mesh(size: f32, thickness: f32) -> Mesh {
+    let outer = size;
+    let inner = size - thickness;
+
+    let mut positions = Vec::with_capacity(12);
+    let mut indices = Vec::new();
+
+    // Generate outer and inner vertices interleaved
+    for i in 0..6 {
+        let angle_rad = (60.0 * i as f32).to_radians();
+        let cos = angle_rad.cos();
+        let sin = angle_rad.sin() * ISO_Y_SCALE;
+        positions.push([outer * cos, outer * sin, 0.0]);
+        positions.push([inner * cos, inner * sin, 0.0]);
+    }
+
+    // Create quads for each edge segment
+    for i in 0..6u32 {
+        let next = (i + 1) % 6;
+        let o1 = i * 2; // outer vertex i
+        let i1 = i * 2 + 1; // inner vertex i
+        let o2 = next * 2; // outer vertex i+1
+        let i2 = next * 2 + 1; // inner vertex i+1
+
+        // Two triangles per quad
+        indices.extend_from_slice(&[o1, o2, i2, o1, i2, i1]);
     }
 
     let normals: Vec<[f32; 3]> = (0..positions.len()).map(|_| [0.0, 0.0, 1.0]).collect();

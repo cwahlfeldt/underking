@@ -4,6 +4,7 @@ mod debug_ui;
 mod entities;
 mod grid;
 mod hex;
+mod level;
 mod render;
 mod turn;
 mod undo;
@@ -14,6 +15,7 @@ use bevy::prelude::*;
 use crate::components::{Bomb, Dead, GameEntity, Health, HexPosition, MovePath, Stats};
 use crate::entities::enemy::Enemy;
 use crate::entities::player::Player;
+use crate::level::LevelConfig;
 use crate::turn::{GameSettings, PendingKills, Turn, TurnPhase, TurnState};
 
 fn main() {
@@ -26,6 +28,7 @@ fn main() {
         })
         .insert_resource(TurnState::Active(Turn::Player))
         .init_resource::<turn::PendingKills>()
+        .init_resource::<LevelConfig>()
         .add_plugins((DefaultPlugins, MeshPickingPlugin))
         .add_plugins(render::RenderPlugin)
         .add_plugins(entities::tile::TilePlugin)
@@ -37,8 +40,8 @@ fn main() {
             Update,
             (check_animation_done, combat::resolve_combat).chain(),
         )
-        .add_systems(Startup, (setup, spawn_health_ui, spawn_reset_button))
-        .add_systems(Update, (update_health_ui, unlock_player_on_clear, handle_reset, tick_bombs))
+        .add_systems(Startup, (setup, spawn_health_ui, spawn_level_ui, spawn_reset_button))
+        .add_systems(Update, (update_health_ui, update_level_ui, advance_level_on_clear, handle_reset, tick_bombs))
         .run();
 }
 
@@ -81,11 +84,52 @@ fn update_health_ui(
     **t = format!("HP: {} / {}", health.current as i32, health.max as i32);
 }
 
-/// When all enemies are dead, set the player's move range to 0 (unlimited).
-fn unlock_player_on_clear(
+#[derive(Component)]
+struct LevelText;
+
+fn spawn_level_ui(mut commands: Commands, level_config: Res<LevelConfig>) {
+    commands
+        .spawn(Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(16.0),
+            top: Val::Px(48.0),
+            ..default()
+        })
+        .with_child((
+            LevelText,
+            Text::new(format!("Level: {}", level_config.current + 1)),
+            TextFont {
+                font_size: 24.0,
+                ..default()
+            },
+            TextColor(Color::WHITE),
+        ));
+}
+
+fn update_level_ui(
+    level_config: Res<LevelConfig>,
+    mut text: Query<&mut Text, With<LevelText>>,
+) {
+    if !level_config.is_changed() {
+        return;
+    }
+    let Ok(mut t) = text.single_mut() else { return };
+    **t = format!("Level: {}", level_config.current + 1);
+}
+
+/// When all enemies are dead, advance to the next level (or unlock free movement on the last level).
+fn advance_level_on_clear(
+    mut commands: Commands,
     enemies: Query<(), (With<Enemy>, Without<Dead>)>,
     mut player: Query<(Entity, &HexPosition, &mut Stats), With<Player>>,
     mut grid: ResMut<crate::hex::HexGrid<crate::grid::TileData>>,
+    mut level_config: ResMut<LevelConfig>,
+    mut turn: ResMut<TurnState>,
+    mut game_settings: ResMut<GameSettings>,
+    mut pending_kills: ResMut<PendingKills>,
+    mut history: ResMut<crate::undo::UndoHistory>,
+    mut move_order: ResMut<crate::undo::TurnMoveOrder>,
+    game_entities: Query<Entity, With<GameEntity>>,
 ) {
     if !enemies.is_empty() {
         return;
@@ -93,12 +137,44 @@ fn unlock_player_on_clear(
     let Ok((entity, pos, mut stats)) = player.single_mut() else {
         return;
     };
+    // Already processed (move_range set to 0 means we already detected the clear)
     if stats.move_range == 0 {
         return;
     }
-    stats.move_range = 0;
-    crate::grid::clear_ranges(&mut grid, entity);
-    crate::grid::update_ranges(&mut grid, pos.0, entity, &stats);
+
+    if level_config.advance() {
+        // Advance to next level: despawn everything and respawn
+        stats.move_range = 0; // prevent re-entry
+        drop(player);
+
+        for entity in &game_entities {
+            commands.entity(entity).despawn();
+        }
+
+        *turn = TurnState::Active(Turn::Player);
+        *game_settings = GameSettings {
+            selected_hex: None,
+            hovered_enemy: None,
+            hovered_bomb: None,
+            player_prev_hex: None,
+        };
+        pending_kills.0.clear();
+        *history = crate::undo::UndoHistory::default();
+        move_order.0.clear();
+
+        commands.remove_resource::<crate::hex::HexGrid<crate::grid::TileData>>();
+
+        commands.queue(|world: &mut World| {
+            let _ = world.run_system_once(crate::entities::tile::spawn_tiles);
+            let _ = world.run_system_once(crate::entities::player::spawn_player);
+            let _ = world.run_system_once(crate::entities::enemy::spawn_enemies);
+        });
+    } else {
+        // Last level cleared: unlock free movement
+        stats.move_range = 0;
+        crate::grid::clear_ranges(&mut grid, entity);
+        crate::grid::update_ranges(&mut grid, pos.0, entity, &stats);
+    }
 }
 
 #[derive(Component)]

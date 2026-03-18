@@ -13,6 +13,7 @@ use crate::{
     entities::player::Player,
     grid::{TileData, clear_ranges, is_passable, update_ranges_with_pattern},
     hex::{HEX_SIZE, Hex, HexGrid},
+    level::LevelConfig,
     render::MOVE_SPEED,
     turn::{Turn, TurnPhase, TurnState},
 };
@@ -43,11 +44,13 @@ pub fn spawn_enemies(
     mut commands: Commands,
     mut grid: ResMut<HexGrid<TileData>>,
     player_query: Query<&HexPosition, With<Player>>,
+    level_config: Res<LevelConfig>,
 ) {
     let Ok(player_pos) = player_query.single() else {
         return;
     };
     let player_hex = player_pos.0;
+    let level = level_config.current_level();
 
     let mut rng = rand::rng();
 
@@ -58,19 +61,20 @@ pub fn spawn_enemies(
         .collect();
     candidates.shuffle(&mut rng);
 
-    let grunt_count = grunt::GRUNT_COUNT.min(candidates.len());
+    let grunt_count = level.grunts.min(candidates.len());
     grunt::spawn_grunts(&mut commands, &mut grid, &candidates[..grunt_count]);
 
     let after_grunts = &candidates[grunt_count..];
-    let archer_count = archer::ARCHER_COUNT.min(after_grunts.len());
+    let archer_count = level.archers.min(after_grunts.len());
     archer::spawn_archers(&mut commands, &mut grid, &after_grunts[..archer_count]);
 
     let after_archers = &after_grunts[archer_count..];
-    let warlock_count = warlock::WARLOCK_COUNT.min(after_archers.len());
+    let warlock_count = level.warlocks.min(after_archers.len());
     warlock::spawn_warlocks(&mut commands, &mut grid, &after_archers[..warlock_count]);
 
     let after_warlocks = &after_archers[warlock_count..];
-    bomber::spawn_bombers(&mut commands, &mut grid, after_warlocks);
+    let bomber_count = level.bombers.min(after_warlocks.len());
+    bomber::spawn_bombers(&mut commands, &mut grid, &after_warlocks[..bomber_count]);
 
     commands.insert_resource(EnemyTurnQueue::default());
 }
